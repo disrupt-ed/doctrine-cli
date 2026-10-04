@@ -1,0 +1,200 @@
+diff --git a/internal/reader/fetcher/retry.go b/internal/reader/fetcher/retry.go
+new file mode 100644
+index 00000000..570fa211
+--- /dev/null
++++ b/internal/reader/fetcher/retry.go
+@@ -0,0 +1,75 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package fetcher // import "miniflux.app/v2/internal/reader/fetcher"
++
++import (
++	"errors"
++	"io"
++	"log/slog"
++	"net"
++	"net/http"
++	"os"
++	"time"
++)
++
++const maxFetchAttempts = 3
++
++// retryBaseDelay is the wait before the first retry; it doubles on each
++// following attempt. It is a variable so tests can shorten it.
++var retryBaseDelay = time.Second
++
++// ExecuteRequestWithRetry behaves like ExecuteRequest, but retries temporary
++// failures (timeouts, connection errors, 502/503/504 responses) with
++// exponential backoff, up to maxFetchAttempts attempts in total. The result of
++// the last attempt is returned as is.
++func (r *RequestBuilder) ExecuteRequestWithRetry(requestURL string) (*http.Response, error) {
++	delay := retryBaseDelay
++
++	for attempt := 1; ; attempt++ {
++		resp, err := r.ExecuteRequest(requestURL)
++		if attempt == maxFetchAttempts || !isTemporaryFailure(resp, err) {
++			return resp, err
++		}
++
++		if resp != nil {
++			resp.Body.Close()
++		}
++
++		slog.Debug("Temporary fetch failure, retrying",
++			slog.String("url", requestURL),
++			slog.Int("attempt", attempt),
++			slog.Duration("retry_in", delay),
++			slog.Any("error", err),
++		)
++
++		time.Sleep(delay)
++		delay *= 2
++	}
++}
++
++func isTemporaryFailure(resp *http.Response, err error) bool {
++	if err != nil {
++		if errors.Is(err, ErrPrivateNetworkHost) || isSSLError(err) {
++			return false
++		}
++
++		if dnsErr, ok := errors.AsType[*net.DNSError](err); ok {
++			return !dnsErr.IsNotFound
++		}
++
++		if os.IsTimeout(err) || errors.Is(err, io.EOF) {
++			return true
++		}
++
++		_, ok := errors.AsType[*net.OpError](err)
++		return ok
++	}
++
++	switch resp.StatusCode {
++	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
++		return true
++	}
++
++	return false
++}
+diff --git a/internal/reader/fetcher/retry_test.go b/internal/reader/fetcher/retry_test.go
+new file mode 100644
+index 00000000..8a23afc0
+--- /dev/null
++++ b/internal/reader/fetcher/retry_test.go
+@@ -0,0 +1,91 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package fetcher // import "miniflux.app/v2/internal/reader/fetcher"
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func TestExecuteRequestWithRetry(t *testing.T) {
++	retryBaseDelay = time.Millisecond
++	t.Cleanup(func() { retryBaseDelay = time.Second })
++
++	tests := []struct {
++		name         string
++		statuses     []int // status per attempt; the last one repeats
++		wantStatus   int
++		wantAttempts int32
++	}{
++		{"success is not retried", []int{200}, 200, 1},
++		{"503 then success", []int{503, 200}, 200, 2},
++		{"502 and 504 then success", []int{502, 504, 200}, 200, 3},
++		{"gives up after max attempts", []int{503}, 503, maxFetchAttempts},
++		{"404 is not retried", []int{404}, 404, 1},
++		{"429 is not retried", []int{429}, 429, 1},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			var attempts atomic.Int32
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				n := int(attempts.Add(1))
++				w.WriteHeader(tt.statuses[min(n, len(tt.statuses))-1])
++			}))
++			defer server.Close()
++
++			resp, err := NewRequestBuilder().ExecuteRequestWithRetry(server.URL)
++			if err != nil {
++				t.Fatalf("Unexpected error: %v", err)
++			}
++			defer resp.Body.Close()
++
++			if resp.StatusCode != tt.wantStatus {
++				t.Errorf("Expected status %d, got %d", tt.wantStatus, resp.StatusCode)
++			}
++			if got := attempts.Load(); got != tt.wantAttempts {
++				t.Errorf("Expected %d attempts, got %d", tt.wantAttempts, got)
++			}
++		})
++	}
++}
++
++func TestExecuteRequestWithRetryConnectionError(t *testing.T) {
++	retryBaseDelay = time.Millisecond
++	t.Cleanup(func() { retryBaseDelay = time.Second })
++
++	var attempts atomic.Int32
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if attempts.Add(1) == 1 {
++			// Drop the connection without answering.
++			conn, _, _ := w.(http.Hijacker).Hijack()
++			conn.Close()
++			return
++		}
++		w.WriteHeader(http.StatusOK)
++	}))
++	defer server.Close()
++
++	resp, err := NewRequestBuilder().ExecuteRequestWithRetry(server.URL)
++	if err != nil {
++		t.Fatalf("Expected the retry to succeed, got: %v", err)
++	}
++	defer resp.Body.Close()
++
++	if got := attempts.Load(); got != 2 {
++		t.Errorf("Expected 2 attempts, got %d", got)
++	}
++}
++
++func TestExecuteRequestWithRetryPermanentError(t *testing.T) {
++	retryBaseDelay = time.Hour // would hang the test if a retry were attempted
++	t.Cleanup(func() { retryBaseDelay = time.Second })
++
++	if _, err := NewRequestBuilder().ExecuteRequestWithRetry("invalid-url"); err == nil {
++		t.Fatal("Expected an error for an invalid URL")
++	}
++}
+diff --git a/internal/reader/handler/handler.go b/internal/reader/handler/handler.go
+index 01ced0da..30843df5 100644
+--- a/internal/reader/handler/handler.go
++++ b/internal/reader/handler/handler.go
+@@ -132,7 +132,7 @@ func CreateFeed(store *storage.Storage, userID int64, feedCreationRequest *model
+ 		IgnoreTLSErrors(feedCreationRequest.AllowSelfSignedCertificates).
+ 		DisableHTTP2(feedCreationRequest.DisableHTTP2)
+ 
+-	responseHandler := fetcher.NewResponseHandler(requestBuilder.ExecuteRequest(feedCreationRequest.FeedURL))
++	responseHandler := fetcher.NewResponseHandler(requestBuilder.ExecuteRequestWithRetry(feedCreationRequest.FeedURL))
+ 	defer responseHandler.Close()
+ 
+ 	if localizedError := responseHandler.LocalizedError(); localizedError != nil {
+@@ -248,7 +248,7 @@ func RefreshFeed(store *storage.Storage, userID, feedID int64, forceRefresh bool
+ 			WithLastModified(originalFeed.LastModifiedHeader)
+ 	}
+ 
+-	responseHandler := fetcher.NewResponseHandler(requestBuilder.ExecuteRequest(originalFeed.FeedURL))
++	responseHandler := fetcher.NewResponseHandler(requestBuilder.ExecuteRequestWithRetry(originalFeed.FeedURL))
+ 	defer responseHandler.Close()
+ 
+ 	if responseHandler.IsRateLimited() {

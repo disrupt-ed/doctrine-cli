@@ -1,0 +1,107 @@
+diff --git a/Gemfile b/Gemfile
+index 1b1cf4a..c8ec19c 100644
+--- a/Gemfile
++++ b/Gemfile
+@@ -44,6 +44,7 @@ gem "rails_autolink"
+ gem "geared_pagination"
+ gem "jbuilder"
+ gem "net-http-persistent"
++gem "faraday"
+ gem "surfguard", github: "basecamp/surfguard" # The SSRF address policy behind RestrictedHTTP
+ gem "kredis"
+ gem "platform_agent"
+diff --git a/app/models/webhook.rb b/app/models/webhook.rb
+index 5c307e7..23e06e7 100644
+--- a/app/models/webhook.rb
++++ b/app/models/webhook.rb
+@@ -1,5 +1,4 @@
+-require "net/http"
+-require "uri"
++require "faraday"
+ 
+ class Webhook < ApplicationRecord
+   ENDPOINT_TIMEOUT = 7.seconds
+@@ -14,28 +13,19 @@ class Webhook < ApplicationRecord
+         receive_attachment_reply_to(message.room, attachment: attachment)
+       end
+     end
+-  rescue Net::OpenTimeout, Net::ReadTimeout
++  rescue Faraday::TimeoutError
+     receive_text_reply_to message.room, text: "Failed to respond within #{ENDPOINT_TIMEOUT} seconds"
+   end
+ 
+   private
+     def post(payload)
+-      http.request \
+-        Net::HTTP::Post.new(uri, "Content-Type" => "application/json").tap { |request| request.body = payload }
++      connection.post(url, payload, "Content-Type" => "application/json")
+     end
+ 
+     # No PrivateNetworkGuard, unlike Opengraph::Fetch: only an administrator sets this URL,
+     # and operators legitimately point bots at their own internal services.
+-    def http
+-      Net::HTTP.new(uri.host, uri.port).tap do |http|
+-        http.use_ssl = (uri.scheme == "https")
+-        http.open_timeout = ENDPOINT_TIMEOUT
+-        http.read_timeout = ENDPOINT_TIMEOUT
+-      end
+-    end
+-
+-    def uri
+-      @uri ||= URI(url)
++    def connection
++      Faraday.new(request: { open_timeout: ENDPOINT_TIMEOUT, timeout: ENDPOINT_TIMEOUT })
+     end
+ 
+     def payload(message)
+@@ -55,7 +45,11 @@ class Webhook < ApplicationRecord
+     end
+ 
+     def extract_text_from(response)
+-      String.new(response.body).force_encoding("UTF-8") if response.code == "200" && response.content_type.in?(%w[ text/html text/plain ])
++      String.new(response.body).force_encoding("UTF-8") if response.status == 200 && content_type_of(response).in?(%w[ text/html text/plain ])
++    end
++
++    def content_type_of(response)
++      response.headers["Content-Type"]&.split(";")&.first&.strip&.downcase
+     end
+ 
+     def receive_text_reply_to(room, text:)
+@@ -63,7 +57,7 @@ class Webhook < ApplicationRecord
+     end
+ 
+     def extract_attachment_from(response)
+-      if response.content_type && mime_type = Mime::Type.lookup(response.content_type)
++      if (content_type = content_type_of(response)) && mime_type = Mime::Type.lookup(content_type)
+         ActiveStorage::Blob.create_and_upload! \
+           io: StringIO.new(response.body), filename: "attachment.#{mime_type.symbol}", content_type: mime_type.to_s
+       end
+diff --git a/test/models/webhook_test.rb b/test/models/webhook_test.rb
+index 4f4e3bc..369d4b1 100644
+--- a/test/models/webhook_test.rb
++++ b/test/models/webhook_test.rb
+@@ -14,13 +14,13 @@ class WebhookTest < ActiveSupport::TestCase
+       ))
+ 
+     response = webhooks(:bender).deliver(messages(:first))
+-    assert_equal 200, response.code.to_i
++    assert_equal 200, response.status
+   end
+ 
+   test "delivery" do
+     WebMock.stub_request(:post, webhooks(:bender).url).to_return(status: 200, body: "", headers: {})
+     response = webhooks(:bender).deliver(messages(:first))
+-    assert_equal 200, response.code.to_i
++    assert_equal 200, response.status
+   end
+ 
+   test "delivery with OK text reply" do
+@@ -47,7 +47,7 @@ class WebhookTest < ActiveSupport::TestCase
+   end
+ 
+   test "delivery that times out" do
+-    Webhook.any_instance.stubs(:post).raises(Net::OpenTimeout)
++    Webhook.any_instance.stubs(:post).raises(Faraday::TimeoutError)
+     response = webhooks(:bender).deliver(messages(:first))
+ 
+     reply_message = Message.last

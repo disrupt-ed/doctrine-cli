@@ -1,0 +1,39 @@
+diff --git a/app/controllers/messages_controller.rb b/app/controllers/messages_controller.rb
+index 4cbc771..8abd3f1 100644
+--- a/app/controllers/messages_controller.rb
++++ b/app/controllers/messages_controller.rb
+@@ -5,6 +5,8 @@ class MessagesController < ApplicationController
+   before_action :set_message, only: %i[ show edit update destroy ]
+   before_action :ensure_can_administer, only: %i[ edit update destroy ]
+ 
++  rate_limit to: 20, within: 1.minute, only: :create, by: -> { Current.user.id }, with: -> { head :too_many_requests }
++
+   layout false, only: :index
+ 
+   def index
+diff --git a/test/controllers/messages_controller_test.rb b/test/controllers/messages_controller_test.rb
+index 8088694..c99567d 100644
+--- a/test/controllers/messages_controller_test.rb
++++ b/test/controllers/messages_controller_test.rb
+@@ -57,6 +57,21 @@ class MessagesControllerTest < ActionDispatch::IntegrationTest
+     end
+   end
+ 
++  test "creating more than 20 messages a minute is rate limited per user" do
++    original_store, MessagesController.cache_store = MessagesController.cache_store, ActiveSupport::Cache::MemoryStore.new
++
++    21.times do |i|
++      post room_messages_url(@room, format: :turbo_stream), params: { message: { body: "Message #{i}", client_message_id: i } }
++    end
++    assert_response :too_many_requests
++
++    sign_in :jz
++    post room_messages_url(@room, format: :turbo_stream), params: { message: { body: "Other user", client_message_id: 99 } }
++    assert_response :success
++  ensure
++    MessagesController.cache_store = original_store
++  end
++
+   test "creating a message broadcasts unread room to each member" do
+     @room.users.each do |member|
+       assert_broadcasts UnreadRoomsChannel.stream_name_for(member.id), 1 do

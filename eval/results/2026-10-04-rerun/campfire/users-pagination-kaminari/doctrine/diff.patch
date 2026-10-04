@@ -1,0 +1,26 @@
+diff --git a/app/controllers/accounts/users_controller.rb b/app/controllers/accounts/users_controller.rb
+index 8adefef..c7ecd7f 100644
+--- a/app/controllers/accounts/users_controller.rb
++++ b/app/controllers/accounts/users_controller.rb
+@@ -2,7 +2,7 @@ class Accounts::UsersController < ApplicationController
+   before_action :ensure_can_administer, :set_user, only: %i[ update destroy ]
+ 
+   def index
+-    set_page_and_extract_portion_from User.active.ordered.without_bots, per_page: 500
++    set_page_and_extract_portion_from User.active.ordered.without_bots, per_page: 50
+   end
+ 
+   def update
+diff --git a/app/controllers/accounts_controller.rb b/app/controllers/accounts_controller.rb
+index dda9d83..d6b3535 100644
+--- a/app/controllers/accounts_controller.rb
++++ b/app/controllers/accounts_controller.rb
+@@ -5,7 +5,7 @@ class AccountsController < ApplicationController
+   def edit
+     users = account_users.ordered.without_bots
+     @administrators, @members = users.partition(&:administrator?)
+-    set_page_and_extract_portion_from users, per_page: 500
++    set_page_and_extract_portion_from users, per_page: 50
+   end
+ 
+   def update

@@ -1,0 +1,368 @@
+diff --git a/internal/locale/translations/ar_SA.json b/internal/locale/translations/ar_SA.json
+index d779ebd8..d0e720d9 100644
+--- a/internal/locale/translations/ar_SA.json
++++ b/internal/locale/translations/ar_SA.json
+@@ -140,6 +140,7 @@
+     "error.invalid_entry_order": "ترتيب المقال غير صالح.",
+     "error.invalid_feed_proxy_url": "رابط الوكيل (Proxy) غير صالح.",
+     "error.invalid_feed_url": "رابط المصدر غير صالح.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "تصفح الإيماءات غير صالح.",
+     "error.invalid_language": "اللغة غير صالحة.",
+     "error.invalid_site_url": "رابط الموقع غير صالح.",
+diff --git a/internal/locale/translations/de_DE.json b/internal/locale/translations/de_DE.json
+index 46068777..8a754a72 100644
+--- a/internal/locale/translations/de_DE.json
++++ b/internal/locale/translations/de_DE.json
+@@ -126,6 +126,7 @@
+     "error.invalid_entry_order": "Ungültige Sortierreihenfolge.",
+     "error.invalid_feed_proxy_url": "Ungültige Proxy-URL.",
+     "error.invalid_feed_url": "Ungültiger Feed-URL.",
++    "error.invalid_webhook_url": "Ungültige Webhook-URL. Sie muss mit http:// oder https:// beginnen und einen Host enthalten.",
+     "error.invalid_gesture_nav": "Ungültige Gestennavigation.",
+     "error.invalid_language": "Ungültige Sprache.",
+     "error.invalid_site_url": "Ungültiger Site-URL.",
+diff --git a/internal/locale/translations/el_EL.json b/internal/locale/translations/el_EL.json
+index fee77a6a..587fe490 100644
+--- a/internal/locale/translations/el_EL.json
++++ b/internal/locale/translations/el_EL.json
+@@ -126,6 +126,7 @@
+     "error.invalid_entry_order": "Η σειρά των καταχωρήσεων είναι μη έγκυρη.",
+     "error.invalid_feed_proxy_url": "Μη έγκυρη διεύθυνση URL διακομιστή μεσολάβησης.",
+     "error.invalid_feed_url": "Μη έγκυρη διεύθυνση URL ροής.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "Μη έγκυρη πλοήγηση με χειρονομίες.",
+     "error.invalid_language": "Μη έγκυρη γλώσσα.",
+     "error.invalid_site_url": "Μη έγκυρη διεύθυνση URL ιστότοπου.",
+diff --git a/internal/locale/translations/en_US.json b/internal/locale/translations/en_US.json
+index f423e952..af820e4e 100644
+--- a/internal/locale/translations/en_US.json
++++ b/internal/locale/translations/en_US.json
+@@ -131,6 +131,7 @@
+     "error.invalid_gesture_nav": "Invalid gesture navigation.",
+     "error.invalid_language": "Invalid language.",
+     "error.invalid_site_url": "Invalid site URL.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_theme": "Invalid theme.",
+     "error.invalid_timezone": "Invalid timezone.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+diff --git a/internal/locale/translations/es_ES.json b/internal/locale/translations/es_ES.json
+index 9eb1d928..15942fca 100644
+--- a/internal/locale/translations/es_ES.json
++++ b/internal/locale/translations/es_ES.json
+@@ -126,6 +126,7 @@
+     "error.invalid_entry_order": "Orden de artículo no válido.",
+     "error.invalid_feed_proxy_url": "URL de proxy inválida.",
+     "error.invalid_feed_url": "URL de feed no válida.",
++    "error.invalid_webhook_url": "URL de webhook no válida. Debe comenzar con http:// o https:// e incluir un host.",
+     "error.invalid_gesture_nav": "Navegación por gestos no válida.",
+     "error.invalid_language": "Idioma no válido.",
+     "error.invalid_site_url": "URL del sitio no válida.",
+diff --git a/internal/locale/translations/fi_FI.json b/internal/locale/translations/fi_FI.json
+index 20e240b7..d32e2f57 100644
+--- a/internal/locale/translations/fi_FI.json
++++ b/internal/locale/translations/fi_FI.json
+@@ -126,6 +126,7 @@
+     "error.invalid_entry_order": "Virheellinen artikkelin lajittelu.",
+     "error.invalid_feed_proxy_url": "Virheellinen välityspalvelimen URL.",
+     "error.invalid_feed_url": "Virheellinen syötteen URL-osoite.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "Virheellinen ele-navigointi.",
+     "error.invalid_language": "Virheellinen kieli.",
+     "error.invalid_site_url": "Virheellinen sivuston URL-osoite.",
+diff --git a/internal/locale/translations/fr_FR.json b/internal/locale/translations/fr_FR.json
+index 6f02344e..2537cb43 100644
+--- a/internal/locale/translations/fr_FR.json
++++ b/internal/locale/translations/fr_FR.json
+@@ -126,6 +126,7 @@
+     "error.invalid_entry_order": "Ordre de tri non valide.",
+     "error.invalid_feed_proxy_url": "L'URL du proxy n'est pas valide.",
+     "error.invalid_feed_url": "URL de flux non valide.",
++    "error.invalid_webhook_url": "URL de webhook non valide. Elle doit commencer par http:// ou https:// et inclure un hôte.",
+     "error.invalid_gesture_nav": "Navigation gestuelle non valide.",
+     "error.invalid_language": "Langue non valide.",
+     "error.invalid_site_url": "URL de site non valide.",
+diff --git a/internal/locale/translations/gl_ES.json b/internal/locale/translations/gl_ES.json
+index f1b8050f..bca965fc 100644
+--- a/internal/locale/translations/gl_ES.json
++++ b/internal/locale/translations/gl_ES.json
+@@ -128,6 +128,7 @@
+     "error.invalid_entry_order": "Orde da entrada non válida.",
+     "error.invalid_feed_proxy_url": "URL do mandatario non válido.",
+     "error.invalid_feed_url": "URL da canle non válido.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "Xesto de navegación non válido.",
+     "error.invalid_language": "Idioma non válido.",
+     "error.invalid_site_url": "URL da web non válido.",
+diff --git a/internal/locale/translations/hi_IN.json b/internal/locale/translations/hi_IN.json
+index 1bb01b97..a720f23c 100644
+--- a/internal/locale/translations/hi_IN.json
++++ b/internal/locale/translations/hi_IN.json
+@@ -126,6 +126,7 @@
+     "error.invalid_entry_order": "अमान्य प्रविष्टि क्रम।",
+     "error.invalid_feed_proxy_url": "अमान्य प्रॉक्सी यूआरएल।",
+     "error.invalid_feed_url": "दृष्टिकोण यूआरएल.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "अमान्य इशारा नेविगेशन।",
+     "error.invalid_language": "अमान्य भाषा.",
+     "error.invalid_site_url": "अमान्य साइट यूआरएल",
+diff --git a/internal/locale/translations/id_ID.json b/internal/locale/translations/id_ID.json
+index e27cd0d7..bcb444b8 100644
+--- a/internal/locale/translations/id_ID.json
++++ b/internal/locale/translations/id_ID.json
+@@ -123,6 +123,7 @@
+     "error.invalid_entry_order": "Urutan entri tidak valid.",
+     "error.invalid_feed_proxy_url": "URL proksi tidak valid.",
+     "error.invalid_feed_url": "URL umpan tidak valid.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "Navigasi gestur tidak valid.",
+     "error.invalid_language": "Bahasa tidak valid.",
+     "error.invalid_site_url": "URL situs tidak valid.",
+diff --git a/internal/locale/translations/it_IT.json b/internal/locale/translations/it_IT.json
+index 1f6a03fb..3a8a3995 100644
+--- a/internal/locale/translations/it_IT.json
++++ b/internal/locale/translations/it_IT.json
+@@ -126,6 +126,7 @@
+     "error.invalid_entry_order": "L'ordinamento delle voci non è valido.",
+     "error.invalid_feed_proxy_url": "URL del proxy non valido.",
+     "error.invalid_feed_url": "URL del feed non valido.",
++    "error.invalid_webhook_url": "URL del webhook non valido. Deve iniziare con http:// o https:// e includere un host.",
+     "error.invalid_gesture_nav": "Navigazione gestuale non valida.",
+     "error.invalid_language": "Lingua non valida.",
+     "error.invalid_site_url": "URL del sito non valido.",
+diff --git a/internal/locale/translations/ja_JP.json b/internal/locale/translations/ja_JP.json
+index c31249e8..358efd34 100644
+--- a/internal/locale/translations/ja_JP.json
++++ b/internal/locale/translations/ja_JP.json
+@@ -123,6 +123,7 @@
+     "error.invalid_entry_order": "記事の表示順が無効です。",
+     "error.invalid_feed_proxy_url": "プロキシURLが無効です。",
+     "error.invalid_feed_url": "フィード URL が無効です。",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "ジェスチャー ナビゲーションが無効です。",
+     "error.invalid_language": "言語が無効です。",
+     "error.invalid_site_url": "サイト URL が無効です。",
+diff --git a/internal/locale/translations/ko_KR.json b/internal/locale/translations/ko_KR.json
+index 285904ec..f1f8350e 100644
+--- a/internal/locale/translations/ko_KR.json
++++ b/internal/locale/translations/ko_KR.json
+@@ -123,6 +123,7 @@
+     "error.invalid_entry_order": "게시물 표시 순서가 유효하지 않습니다.",
+     "error.invalid_feed_proxy_url": "프록시 URL이 유효하지 않습니다.",
+     "error.invalid_feed_url": "피드 URL이 유효하지 않습니다.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "제스처 내비게이션이 유효하지 않습니다.",
+     "error.invalid_language": "언어가 유효하지 않습니다.",
+     "error.invalid_site_url": "사이트 URL이 유효하지 않습니다.",
+diff --git a/internal/locale/translations/nan_Latn_pehoeji.json b/internal/locale/translations/nan_Latn_pehoeji.json
+index 75ca826e..c525137c 100644
+--- a/internal/locale/translations/nan_Latn_pehoeji.json
++++ b/internal/locale/translations/nan_Latn_pehoeji.json
+@@ -123,6 +123,7 @@
+     "error.invalid_entry_order": "Siau-sit ê chōe pái bô-hāu, chhiáⁿ tán-hāu %d hun-cheng āu koh chhì-khòaⁿ-māi.",
+     "error.invalid_feed_proxy_url": "Proxy URL ū būn-tôe.",
+     "error.invalid_feed_url": "Beh tēng ê siau-sit lâi-goân ê bāng-chí ū būn-tôe.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "Chhiú-sè tō-lám ū būn-tôe.",
+     "error.invalid_language": "Ū būn-tôe ê gú-giân.",
+     "error.invalid_site_url": "Siau-sit lâi-goân ê bāng-chām ê bāng-chí ū būn-tôe.",
+diff --git a/internal/locale/translations/nl_NL.json b/internal/locale/translations/nl_NL.json
+index c7ba53af..214ffc56 100644
+--- a/internal/locale/translations/nl_NL.json
++++ b/internal/locale/translations/nl_NL.json
+@@ -126,6 +126,7 @@
+     "error.invalid_entry_order": "Ongeldige volgorde van artikelen.",
+     "error.invalid_feed_proxy_url": "Ongeldige proxy-URL.",
+     "error.invalid_feed_url": "Ongeldige feed URL.",
++    "error.invalid_webhook_url": "Ongeldige webhook-URL. Deze moet beginnen met http:// of https:// en een host bevatten.",
+     "error.invalid_gesture_nav": "Ongeldige gebarennavigatie.",
+     "error.invalid_language": "Ongeldige taal.",
+     "error.invalid_site_url": "Ongeldige site URL.",
+diff --git a/internal/locale/translations/pl_PL.json b/internal/locale/translations/pl_PL.json
+index e40e9ce5..be3222cf 100644
+--- a/internal/locale/translations/pl_PL.json
++++ b/internal/locale/translations/pl_PL.json
+@@ -129,6 +129,7 @@
+     "error.invalid_entry_order": "Nieprawidłowa kolejność sortowania wpisów.",
+     "error.invalid_feed_proxy_url": "Nieprawidłowy adres URL serwera proxy.",
+     "error.invalid_feed_url": "Nieprawidłowy adres URL kanału.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "Nieprawidłowa nawigacja gestami.",
+     "error.invalid_language": "Nieprawidłowy język.",
+     "error.invalid_site_url": "Nieprawidłowy adres URL witryny.",
+diff --git a/internal/locale/translations/pt_BR.json b/internal/locale/translations/pt_BR.json
+index f7bd3333..4909b26f 100644
+--- a/internal/locale/translations/pt_BR.json
++++ b/internal/locale/translations/pt_BR.json
+@@ -126,6 +126,7 @@
+     "error.invalid_entry_order": "A ordem de entrada é inválida.",
+     "error.invalid_feed_proxy_url": "URL de proxy inválido.",
+     "error.invalid_feed_url": "URL de feed inválido.",
++    "error.invalid_webhook_url": "URL de webhook inválido. Deve começar com http:// ou https:// e incluir um host.",
+     "error.invalid_gesture_nav": "Navegação por gestos inválida.",
+     "error.invalid_language": "Idioma inválido.",
+     "error.invalid_site_url": "URL de site inválido.",
+diff --git a/internal/locale/translations/ro_RO.json b/internal/locale/translations/ro_RO.json
+index 17f5998d..c8265702 100644
+--- a/internal/locale/translations/ro_RO.json
++++ b/internal/locale/translations/ro_RO.json
+@@ -129,6 +129,7 @@
+     "error.invalid_entry_order": "Direcție de sortare invalidă.",
+     "error.invalid_feed_proxy_url": "URL proxy invalid.",
+     "error.invalid_feed_url": "Adresa URL a fluxului este invalidă.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "Gest de navigare invalid.",
+     "error.invalid_language": "Limbă invalidă.",
+     "error.invalid_site_url": "Adresa URL a site-ului este invalidă.",
+diff --git a/internal/locale/translations/ru_RU.json b/internal/locale/translations/ru_RU.json
+index 535501fd..45903030 100644
+--- a/internal/locale/translations/ru_RU.json
++++ b/internal/locale/translations/ru_RU.json
+@@ -129,6 +129,7 @@
+     "error.invalid_entry_order": "Недопустимый порядок статей.",
+     "error.invalid_feed_proxy_url": "Недействительный URL прокси.",
+     "error.invalid_feed_url": "Недействительная ссылка подписки.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "Недопустимая навигация жестами.",
+     "error.invalid_language": "Недопустимый язык.",
+     "error.invalid_site_url": "Недействительный ссылка сайта.",
+diff --git a/internal/locale/translations/tr_TR.json b/internal/locale/translations/tr_TR.json
+index 9d55d911..7e0eda27 100644
+--- a/internal/locale/translations/tr_TR.json
++++ b/internal/locale/translations/tr_TR.json
+@@ -126,6 +126,7 @@
+     "error.invalid_entry_order": "Geçersiz makele sıralaması.",
+     "error.invalid_feed_proxy_url": "Geçersiz proxy URL'si.",
+     "error.invalid_feed_url": "Geçersiz besleme URL'si.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "Hareketle gezinme geçersiz.",
+     "error.invalid_language": "Geçersiz dil.",
+     "error.invalid_site_url": "Geçersiz site URL'si.",
+diff --git a/internal/locale/translations/uk_UA.json b/internal/locale/translations/uk_UA.json
+index 491a3edd..1f144376 100644
+--- a/internal/locale/translations/uk_UA.json
++++ b/internal/locale/translations/uk_UA.json
+@@ -129,6 +129,7 @@
+     "error.invalid_entry_order": "Недійсний порядок запису.",
+     "error.invalid_feed_proxy_url": "Недійсний proxy URL.",
+     "error.invalid_feed_url": "Недійсна URL-адреса стрічки.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "Недійсна навігація жестами.",
+     "error.invalid_language": "Недійсна мова.",
+     "error.invalid_site_url": "Недійсна URL-адреса сайту.",
+diff --git a/internal/locale/translations/zh_CN.json b/internal/locale/translations/zh_CN.json
+index a67ec73c..d5de5c21 100644
+--- a/internal/locale/translations/zh_CN.json
++++ b/internal/locale/translations/zh_CN.json
+@@ -123,6 +123,7 @@
+     "error.invalid_entry_order": "无效的条目排序。",
+     "error.invalid_feed_proxy_url": "无效的代理 URL。",
+     "error.invalid_feed_url": "无效的订阅源 URL。",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "无效的手势导航。",
+     "error.invalid_language": "无效的语言。",
+     "error.invalid_site_url": "无效的网站 URL。",
+diff --git a/internal/locale/translations/zh_TW.json b/internal/locale/translations/zh_TW.json
+index 507ce2f2..bc72ab28 100644
+--- a/internal/locale/translations/zh_TW.json
++++ b/internal/locale/translations/zh_TW.json
+@@ -123,6 +123,7 @@
+     "error.invalid_entry_order": "無效的文章排序依據。",
+     "error.invalid_feed_proxy_url": "代理伺服器網址無效。",
+     "error.invalid_feed_url": "訂閱網址無效。",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must start with http:// or https:// and include a host.",
+     "error.invalid_gesture_nav": "手勢導覽無效。",
+     "error.invalid_language": "無效的語言。",
+     "error.invalid_site_url": "Feed 網站的網址無效。",
+diff --git a/internal/ui/form/integration.go b/internal/ui/form/integration.go
+index a41c26dd..7cb2d973 100644
+--- a/internal/ui/form/integration.go
++++ b/internal/ui/form/integration.go
+@@ -5,10 +5,12 @@ package form // import "miniflux.app/v2/internal/ui/form"
+ 
+ import (
+ 	"net/http"
++	"net/url"
+ 	"strconv"
+ 
+ 	"miniflux.app/v2/internal/locale"
+ 	"miniflux.app/v2/internal/model"
++	"miniflux.app/v2/internal/urllib"
+ )
+ 
+ // IntegrationForm represents user integration settings form.
+@@ -269,6 +271,20 @@ func (i IntegrationForm) ValidateGoogleReader(storedPasswordHash string) *locale
+ 	return nil
+ }
+ 
++// ValidateWebhook ensures the webhook URL, when set, is an absolute HTTP or HTTPS URL with a host.
++func (i IntegrationForm) ValidateWebhook() *locale.LocalizedError {
++	if !i.WebhookEnabled || i.WebhookURL == "" {
++		return nil
++	}
++	if !urllib.IsAbsoluteURL(i.WebhookURL) {
++		return locale.NewLocalizedError("error.invalid_webhook_url")
++	}
++	if parsedURL, err := url.Parse(i.WebhookURL); err != nil || parsedURL.Hostname() == "" {
++		return locale.NewLocalizedError("error.invalid_webhook_url")
++	}
++	return nil
++}
++
+ // NewIntegrationForm returns a new IntegrationForm.
+ func NewIntegrationForm(r *http.Request) *IntegrationForm {
+ 	return &IntegrationForm{
+diff --git a/internal/ui/form/integration_test.go b/internal/ui/form/integration_test.go
+index e8d7f59b..f5fb3204 100644
+--- a/internal/ui/form/integration_test.go
++++ b/internal/ui/form/integration_test.go
+@@ -57,3 +57,32 @@ func TestValidateGoogleReader(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestValidateWebhook(t *testing.T) {
++	scenarios := []struct {
++		name        string
++		form        IntegrationForm
++		expectError bool
++	}{
++		{name: "disabled with invalid URL", form: IntegrationForm{WebhookURL: "nope"}},
++		{name: "enabled with empty URL", form: IntegrationForm{WebhookEnabled: true}},
++		{name: "https URL", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "https://example.org/hook"}},
++		{name: "http URL with port", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "http://localhost:8080/hook"}},
++		{name: "missing scheme", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "example.org/hook"}, expectError: true},
++		{name: "unsupported scheme", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "ftp://example.org/hook"}, expectError: true},
++		{name: "missing host", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "http:///hook"}, expectError: true},
++		{name: "unparsable URL", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "http://exa mple.org"}, expectError: true},
++	}
++
++	for _, scenario := range scenarios {
++		t.Run(scenario.name, func(t *testing.T) {
++			validationErr := scenario.form.ValidateWebhook()
++			if scenario.expectError && validationErr == nil {
++				t.Fatal("expected a validation error")
++			}
++			if !scenario.expectError && validationErr != nil {
++				t.Fatalf("unexpected validation error: %v", validationErr)
++			}
++		})
++	}
++}
+diff --git a/internal/ui/integration_update.go b/internal/ui/integration_update.go
+index ffa68ce3..060b96a4 100644
+--- a/internal/ui/integration_update.go
++++ b/internal/ui/integration_update.go
+@@ -67,6 +67,12 @@ func (h *handler) updateIntegration(w http.ResponseWriter, r *http.Request) {
+ 		integration.GoogleReaderPassword = ""
+ 	}
+ 
++	if validationErr := integrationForm.ValidateWebhook(); validationErr != nil {
++		sess.SetErrorMessage(validationErr.Translate(sess.Language()))
++		response.HTMLRedirect(w, r, h.routePath("/integrations"))
++		return
++	}
++
+ 	if integrationForm.WebhookEnabled {
+ 		if integrationForm.WebhookURL == "" {
+ 			integration.WebhookEnabled = false

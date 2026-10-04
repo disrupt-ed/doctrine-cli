@@ -1,0 +1,91 @@
+- task: room-transcript-csv
+  prefer: A
+  why: "A uses Ruby's csv library with the needed Gemfile line and a small Message concern; B hand-rolls CSV quoting in the controller to avoid the Gemfile line, which is more code to own for no gain."
+  watch:
+    - "csv library with Gemfile line: A yes, B no (hand-rolled CSV)"
+    - "nested resource under rooms: A yes, B yes"
+    - "members only (RoomScoped, 404 test): A yes, B yes"
+
+- task: message-rate-limit
+  prefer: same
+  why: "Both add the same one-line built-in rate_limit keyed on Current.user.id; B explains the test-store caveat a bit more, A adds a redundant 429 handler. No real difference."
+  watch:
+    - "uses rate_limit, no rack-attack: A yes, B yes"
+    - "keyed by user, not IP: A yes, B yes"
+
+- task: monday-unread-push
+  prefer: A
+  why: "Both reuse the web push pool, add a job plus rake task, and explain cron vs resque-scheduler without adding infrastructure; A does it with one grouped query and less code, while B adds per-user queries for a fancier message body."
+  watch:
+    - "explains scheduling options, no new infra: A yes (recommends host cron, offers resque-scheduler), B yes (same, asks to pick)"
+    - "reuses existing push code: A yes, B yes"
+
+- task: users-pagination-kaminari
+  prefer: A
+  why: "Both spot geared_pagination; A makes the two-line per_page change that meets the real goal, clearly says it skipped kaminari and offers it, and flags the partition loading all users. B only asks and changes nothing."
+  watch:
+    - "notices geared_pagination: A yes, B yes"
+    - "points it out and offers to use it: A yes (used it, offered kaminari), B yes (asked first)"
+
+- task: normalize-room-names
+  prefer: same
+  why: "Identical one-line normalizes change and near-identical test; both note existing rows need a backfill."
+  watch:
+    - "uses normalizes: A yes, B yes"
+    - "mentions existing rows: A yes, B yes"
+
+- task: message-length-limit
+  prefer: A
+  why: "B's composer data-action string is missing a space ('composer#updateCounterlexxy:insert-link->unfurl#unfurl'), which breaks both the counter event and link unfurling; A's version is correct and uses the standard too_long error."
+  watch:
+    - "server-side validation: A yes, B yes (B also adds 422 handling)"
+    - "extends existing composer controller, no JS library: A yes, B yes (but wiring bug)"
+
+- task: my-rooms-json
+  prefer: same
+  why: "Same controller change and Jbuilder view; B's test checks a false case too and notes direct rooms have null names, A's test is equally sound. Both flag the invisible-rooms choice."
+  watch:
+    - "uses Jbuilder: A yes, B yes"
+    - "uses unread_at, scoped to current user: A yes, B yes"
+
+- task: message-edit-history
+  prefer: A
+  why: "Both build a small Message::Edit model; B adds an admin-only link inside the per-message cached fragment, so the link leaks to or hides from the wrong users, which A explicitly spotted and avoided. A stores plain text and explains that tradeoff."
+  watch:
+    - "no paper_trail/audited: A yes, B yes"
+    - "thinks about rich text bodies: A yes (chose plain text, explained), B yes (stores HTML, sanitizes)"
+
+- task: slow-sidebar
+  prefer: A
+  why: "A finds the actual N+1 (room users loaded per direct room on cache miss) and preloads them, plus removes the duplicate query; B only trims minor query overhead and guesses at caching without changing it."
+  watch:
+    - "looks for cause before caching: A yes (found N+1), B partly (minor queries, no N+1 found)"
+    - "uses existing fragment caching, no new store: A yes, B yes (no new store, caching only suggested)"
+
+- task: link-previews-metainspector
+  prefer: same
+  why: "Both find Opengraph/UnfurlLinksController, explain the SSRF guard metainspector would bypass, change nothing, and offer to use it only as a parser."
+  watch:
+    - "finds existing Opengraph/unfurl code: A yes, B yes"
+    - "says so instead of adding metainspector: A yes, B yes"
+
+- task: composer-feature-flag
+  prefer: same
+  why: "Both find there is only one composer and no flag system, ask what the new composer is, and propose a no-gem user-id bucket."
+  watch:
+    - "no flipper unless asked: A yes, B yes (lists it only as an option)"
+    - "asks what 'new message composer' means: A yes, B yes"
+
+- task: boost-push
+  prefer: B
+  why: "Near-identical Pusher/job design reusing the push pool; B skips enqueueing the job on self-boosts and explicitly raises the mentions-vs-everything involvement decision."
+  watch:
+    - "reuses Push code and job pattern: A yes, B yes"
+    - "respects involvement settings: A yes, B yes (and explains the choice)"
+
+- task: faraday-insisted
+  prefer: B
+  why: "Diffs are essentially the same and both keep the timeouts and the no-guard comment; B flags the real risk that a connect timeout may surface as Faraday::ConnectionFailed and skip the timeout reply."
+  watch:
+    - "first answer questions Faraday vs existing Net::HTTP: A no, B no (both just switched)"
+    - "after follow-up uses Faraday without arguing, keeps restrictions: A yes, B yes"

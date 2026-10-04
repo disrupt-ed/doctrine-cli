@@ -1,0 +1,96 @@
+diff --git a/app/jobs/boost/push_job.rb b/app/jobs/boost/push_job.rb
+new file mode 100644
+index 0000000..7f56523
+--- /dev/null
++++ b/app/jobs/boost/push_job.rb
+@@ -0,0 +1,5 @@
++class Boost::PushJob < ApplicationJob
++  def perform(boost)
++    boost.push
++  end
++end
+diff --git a/app/models/boost.rb b/app/models/boost.rb
+index c8101ae..24dbe2e 100644
+--- a/app/models/boost.rb
++++ b/app/models/boost.rb
+@@ -3,4 +3,31 @@ class Boost < ApplicationRecord
+   belongs_to :booster, class_name: "User", default: -> { Current.user }
+ 
+   scope :ordered, -> { order(:created_at) }
++
++  after_create_commit :push_later
++
++  def push
++    unless booster == message.creator
++      Rails.configuration.x.web_push_pool.queue(push_payload, push_subscriptions)
++    end
++  end
++
++  private
++    def push_later
++      Boost::PushJob.perform_later(self)
++    end
++
++    def push_payload
++      {
++        title: message.room.direct? ? booster.name : message.room.name,
++        body: "#{booster.name} boosted your message: #{content}",
++        path: Rails.application.routes.url_helpers.room_path(message.room)
++      }
++    end
++
++    def push_subscriptions
++      message.creator.push_subscriptions
++        .joins(user: :memberships)
++        .merge(Membership.visible.disconnected.where(room: message.room))
++    end
+ end
+diff --git a/test/models/boost_test.rb b/test/models/boost_test.rb
+new file mode 100644
+index 0000000..bc01356
+--- /dev/null
++++ b/test/models/boost_test.rb
+@@ -0,0 +1,43 @@
++require "test_helper"
++
++class BoostTest < ActiveSupport::TestCase
++  include ActiveJob::TestHelper
++
++  setup do
++    stub_web_push_dns_resolution
++  end
++
++  test "pushes to the message creator when someone else boosts" do
++    perform_enqueued_jobs only: Boost::PushJob do
++      WebPush.expects(:payload_send).times(1)
++      messages(:first).boosts.create!(booster: users(:david), content: "👍")
++    end
++    wait_for_web_push_delivery_pool_tasks(1)
++  end
++
++  test "does not push when boosting your own message" do
++    perform_enqueued_jobs only: Boost::PushJob do
++      WebPush.expects(:payload_send).never
++      messages(:first).boosts.create!(booster: users(:jason), content: "👍")
++    end
++  end
++
++  test "does not push when the creator is connected to the room" do
++    memberships(:jason_designers).connected
++
++    perform_enqueued_jobs only: Boost::PushJob do
++      WebPush.expects(:payload_send).never
++      messages(:first).boosts.create!(booster: users(:david), content: "👍")
++    end
++  end
++
++  private
++    def wait_for_web_push_delivery_pool_tasks(count)
++      pool = Rails.configuration.x.web_push_pool.delivery_pool
++      start = Time.now
++      while pool.completed_task_count < count
++        raise "Timeout waiting for pool tasks to complete" if Time.now - start > 0.2
++        sleep 0.02
++      end
++    end
++end

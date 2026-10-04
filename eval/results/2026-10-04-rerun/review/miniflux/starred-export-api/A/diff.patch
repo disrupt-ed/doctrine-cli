@@ -1,0 +1,44 @@
+diff --git a/internal/api/api.go b/internal/api/api.go
+index 3cf8f75d..419716e9 100644
+--- a/internal/api/api.go
++++ b/internal/api/api.go
+@@ -50,6 +50,7 @@ func NewHandler(store *storage.Storage, pool *worker.Pool) http.Handler {
+ 	mux.HandleFunc("GET /v1/feeds/{feedID}/icon", handler.getIconByFeedIDHandler)
+ 	mux.HandleFunc("PUT /v1/feeds/{feedID}/mark-all-as-read", handler.markFeedAsReadHandler)
+ 	mux.HandleFunc("GET /v1/export", handler.exportFeedsHandler)
++	mux.HandleFunc("GET /v1/export/starred", handler.exportStarredEntriesHandler)
+ 	mux.HandleFunc("POST /v1/import", handler.importFeedsHandler)
+ 	mux.HandleFunc("GET /v1/feeds/{feedID}/entries", handler.getFeedEntriesHandler)
+ 	mux.HandleFunc("POST /v1/feeds/{feedID}/entries/import", handler.importFeedEntryHandler)
+diff --git a/internal/api/entry_handlers.go b/internal/api/entry_handlers.go
+index 217eeb38..eb3d9301 100644
+--- a/internal/api/entry_handlers.go
++++ b/internal/api/entry_handlers.go
+@@ -209,6 +209,27 @@ func (h *handler) findEntries(w http.ResponseWriter, r *http.Request, feedID int
+ 	response.JSON(w, r, &entriesResponse{Total: count, Entries: entries})
+ }
+ 
++// exportStarredEntriesHandler returns every starred entry of the user as JSON.
++// No limit is set on the query builder, so the result is not paginated.
++func (h *handler) exportStarredEntriesHandler(w http.ResponseWriter, r *http.Request) {
++	entries, err := h.store.NewEntryQueryBuilder(request.UserID(r)).
++		WithStarred(true).
++		WithSorting("published_at", "DESC").
++		WithEnclosures().
++		GetEntries()
++	if err != nil {
++		response.JSONServerError(w, r, err)
++		return
++	}
++
++	for i := range entries {
++		entries[i].Content = mediaproxy.RewriteDocumentWithAbsoluteProxyURL(entries[i].Content)
++		entries[i].Enclosures.ProxifyEnclosureURL(config.Opts.MediaProxyMode(), config.Opts.MediaProxyResourceTypes())
++	}
++
++	response.JSON(w, r, &entriesResponse{Total: len(entries), Entries: entries})
++}
++
+ func (h *handler) setEntryStatusAndStarredHandler(w http.ResponseWriter, r *http.Request) {
+ 	var entriesStatusUpdateRequest model.EntriesStatusUpdateRequest
+ 	if err := json_parser.NewDecoder(r.Body).Decode(&entriesStatusUpdateRequest); err != nil {

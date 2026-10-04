@@ -1,0 +1,116 @@
+diff --git a/app/jobs/push/unread_reminders_job.rb b/app/jobs/push/unread_reminders_job.rb
+new file mode 100644
+index 0000000..b3dfc6f
+--- /dev/null
++++ b/app/jobs/push/unread_reminders_job.rb
+@@ -0,0 +1,5 @@
++class Push::UnreadRemindersJob < ApplicationJob
++  def perform
++    Push::UnreadReminder.deliver_all
++  end
++end
+diff --git a/app/models/push/unread_reminder.rb b/app/models/push/unread_reminder.rb
+new file mode 100644
+index 0000000..49f9add
+--- /dev/null
++++ b/app/models/push/unread_reminder.rb
+@@ -0,0 +1,49 @@
++class Push::UnreadReminder
++  MAX_NAMED_ROOMS = 3
++
++  def self.deliver_all
++    User.active.where(id: Push::Subscription.select(:user_id)).find_each do |user|
++      new(user).deliver
++    end
++  end
++
++  attr_reader :user
++
++  def initialize(user)
++    @user = user
++  end
++
++  def deliver
++    if unread_rooms.any?
++      Rails.configuration.x.web_push_pool.queue(payload, user.push_subscriptions)
++    end
++  end
++
++  private
++    def unread_rooms
++      @unread_rooms ||= user.memberships.visible.unread.includes(:room).map(&:room)
++    end
++
++    def payload
++      { title: "You have unread rooms", body: body, path: path }
++    end
++
++    def body
++      names = unread_rooms.map(&:name).sort_by(&:downcase)
++      remaining = names.size - MAX_NAMED_ROOMS
++
++      if remaining > 0
++        "#{names.first(MAX_NAMED_ROOMS).to_sentence} and #{remaining} more"
++      else
++        names.to_sentence
++      end
++    end
++
++    def path
++      if unread_rooms.one?
++        Rails.application.routes.url_helpers.room_path(unread_rooms.first)
++      else
++        Rails.application.routes.url_helpers.root_path
++      end
++    end
++end
+diff --git a/lib/tasks/push.rake b/lib/tasks/push.rake
+new file mode 100644
+index 0000000..4dd8dac
+--- /dev/null
++++ b/lib/tasks/push.rake
+@@ -0,0 +1,6 @@
++namespace :push do
++  desc "Enqueue the unread rooms reminder push (schedule for Monday morning)"
++  task unread_reminders: :environment do
++    Push::UnreadRemindersJob.perform_later
++  end
++end
+diff --git a/test/models/push/unread_reminder_test.rb b/test/models/push/unread_reminder_test.rb
+new file mode 100644
+index 0000000..39e2eaf
+--- /dev/null
++++ b/test/models/push/unread_reminder_test.rb
+@@ -0,0 +1,32 @@
++require "test_helper"
++
++class Push::UnreadReminderTest < ActiveSupport::TestCase
++  setup do
++    stub_web_push_dns_resolution
++    Membership.update_all(unread_at: nil)
++  end
++
++  test "sends one notification per subscription, regardless of how many rooms are unread" do
++    user = users(:kevin)
++    user.memberships.visible.limit(2).each { |membership| membership.update!(unread_at: Time.current) }
++    count = user.push_subscriptions.count
++
++    WebPush.expects(:payload_send).times(count)
++    Push::UnreadReminder.deliver_all
++    wait_for_web_push_delivery_pool_tasks(count)
++  end
++
++  test "does not notify users without unread rooms" do
++    WebPush.expects(:payload_send).never
++    Push::UnreadReminder.deliver_all
++    wait_for_web_push_delivery_pool_tasks(0)
++  end
++
++  test "ignores unread rooms the user has made invisible" do
++    memberships(:kevin_designers).update!(involvement: :invisible, unread_at: Time.current)
++
++    WebPush.expects(:payload_send).never
++    Push::UnreadReminder.new(users(:kevin)).deliver
++    wait_for_web_push_delivery_pool_tasks(0)
++  end
++end

@@ -1,0 +1,205 @@
+diff --git a/client/client.go b/client/client.go
+index 4f849064..cf1b3abe 100644
+--- a/client/client.go
++++ b/client/client.go
+@@ -633,6 +633,29 @@ func (c *Client) ExportContext(ctx context.Context) ([]byte, error) {
+ 	return opml, nil
+ }
+ 
++// ExportStarredEntries exports all starred entries.
++func (c *Client) ExportStarredEntries() (Entries, error) {
++	ctx, cancel := withDefaultTimeout()
++	defer cancel()
++	return c.ExportStarredEntriesContext(ctx)
++}
++
++// ExportStarredEntriesContext exports all starred entries.
++func (c *Client) ExportStarredEntriesContext(ctx context.Context) (Entries, error) {
++	body, err := c.request.Get(ctx, "/v1/export/starred")
++	if err != nil {
++		return nil, err
++	}
++	defer body.Close()
++
++	var entries Entries
++	if err := json.NewDecoder(body).Decode(&entries); err != nil {
++		return nil, fmt.Errorf("miniflux: response error (%v)", err)
++	}
++
++	return entries, nil
++}
++
+ // Import imports an OPML file.
+ func (c *Client) Import(f io.ReadCloser) error {
+ 	ctx, cancel := withDefaultTimeout()
+diff --git a/internal/api/api.go b/internal/api/api.go
+index 3cf8f75d..419716e9 100644
+--- a/internal/api/api.go
++++ b/internal/api/api.go
+@@ -50,6 +50,7 @@ func NewHandler(store *storage.Storage, pool *worker.Pool) http.Handler {
+ 	mux.HandleFunc("GET /v1/feeds/{feedID}/icon", handler.getIconByFeedIDHandler)
+ 	mux.HandleFunc("PUT /v1/feeds/{feedID}/mark-all-as-read", handler.markFeedAsReadHandler)
+ 	mux.HandleFunc("GET /v1/export", handler.exportFeedsHandler)
++	mux.HandleFunc("GET /v1/export/starred", handler.exportStarredEntriesHandler)
+ 	mux.HandleFunc("POST /v1/import", handler.importFeedsHandler)
+ 	mux.HandleFunc("GET /v1/feeds/{feedID}/entries", handler.getFeedEntriesHandler)
+ 	mux.HandleFunc("POST /v1/feeds/{feedID}/entries/import", handler.importFeedEntryHandler)
+diff --git a/internal/api/api_integration_test.go b/internal/api/api_integration_test.go
+index 498f7d14..c44482f1 100644
+--- a/internal/api/api_integration_test.go
++++ b/internal/api/api_integration_test.go
+@@ -3315,6 +3315,62 @@ func TestToggleStarredEndpoint(t *testing.T) {
+ 	}
+ }
+ 
++func TestExportStarredEntriesEndpoint(t *testing.T) {
++	t.Parallel()
++
++	testConfig := newIntegrationTestConfig()
++	if !testConfig.isConfigured() {
++		t.Skip(skipIntegrationTestsMessage)
++	}
++
++	adminClient := miniflux.NewClient(testConfig.testBaseURL, testConfig.testAdminUsername, testConfig.testAdminPassword)
++
++	regularTestUser, err := adminClient.CreateUser(testConfig.genRandomUsername(), testConfig.testRegularPassword, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer adminClient.DeleteUser(regularTestUser.ID)
++
++	regularUserClient := miniflux.NewClient(testConfig.testBaseURL, regularTestUser.Username, testConfig.testRegularPassword)
++
++	// A user without starred entries gets an empty JSON array.
++	entries, err := regularUserClient.ExportStarredEntries()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(entries) != 0 {
++		t.Fatalf(`Expected no exported entries, got %d`, len(entries))
++	}
++
++	feedID, err := regularUserClient.CreateFeed(&miniflux.FeedCreationRequest{
++		FeedURL: testConfig.testFeedURL,
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	result, err := regularUserClient.FeedEntries(feedID, &miniflux.Filter{Limit: 2})
++	if err != nil {
++		t.Fatalf(`Failed to get entries: %v`, err)
++	}
++	if len(result.Entries) < 2 {
++		t.Fatalf(`Expected at least 2 entries, got %d`, len(result.Entries))
++	}
++
++	starredID := result.Entries[0].ID
++	if err := regularUserClient.ToggleStarred(starredID); err != nil {
++		t.Fatal(err)
++	}
++
++	entries, err = regularUserClient.ExportStarredEntries()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(entries) != 1 || entries[0].ID != starredID || !entries[0].Starred {
++		t.Fatalf(`Expected only the starred entry %d to be exported, got %d entries`, starredID, len(entries))
++	}
++}
++
+ func TestSaveEntryEndpoint(t *testing.T) {
+ 	t.Parallel()
+ 
+diff --git a/internal/api/entry_handlers.go b/internal/api/entry_handlers.go
+index 217eeb38..396cbc0c 100644
+--- a/internal/api/entry_handlers.go
++++ b/internal/api/entry_handlers.go
+@@ -6,6 +6,8 @@ package api // import "miniflux.app/v2/internal/api"
+ import (
+ 	json_parser "encoding/json"
+ 	"errors"
++	"io"
++	"log/slog"
+ 	"net/http"
+ 	"strconv"
+ 	"time"
+@@ -570,6 +572,78 @@ func (h *handler) getEntryIDsHandler(w http.ResponseWriter, r *http.Request) {
+ 	response.JSON(w, r, entryIDsResponse{Total: total, EntryIDs: entryIDs})
+ }
+ 
++// exportStarredEntriesHandler streams every starred entry of the user as a JSON
++// array. Entries are read page by page so memory stays bounded.
++func (h *handler) exportStarredEntriesHandler(w http.ResponseWriter, r *http.Request) {
++	userID := request.UserID(r)
++
++	fetchPage := func(beforeEntryID int64) (model.Entries, error) {
++		entries, err := h.store.NewEntryQueryBuilder(userID).
++			WithStarred(true).
++			WithSorting("id", "DESC").
++			WithLimit(model.MaxEntryLimit).
++			BeforeEntryID(beforeEntryID).
++			WithEnclosures().
++			GetEntries()
++		if err != nil {
++			return nil, err
++		}
++
++		for i := range entries {
++			entries[i].Content = mediaproxy.RewriteDocumentWithAbsoluteProxyURL(entries[i].Content)
++			entries[i].Enclosures.ProxifyEnclosureURL(config.Opts.MediaProxyMode(), config.Opts.MediaProxyResourceTypes())
++		}
++		return entries, nil
++	}
++
++	// The first page is fetched before writing headers so that a failure can
++	// still be reported as a regular error response.
++	entries, err := fetchPage(0)
++	if err != nil {
++		response.JSONServerError(w, r, err)
++		return
++	}
++
++	response.NewBuilder(w, r).
++		WithHeader("Content-Type", "application/json").
++		WithAttachment("starred-entries.json").
++		Write()
++
++	encoder := json_parser.NewEncoder(w)
++	separator := "["
++	for {
++		for i := range entries {
++			if _, err := io.WriteString(w, separator); err != nil {
++				return
++			}
++			separator = ","
++
++			if err := encoder.Encode(&entries[i]); err != nil {
++				slog.Error("Unable to write starred entries export", slog.Int64("user_id", userID), slog.Any("error", err))
++				return
++			}
++		}
++
++		if len(entries) < model.MaxEntryLimit {
++			break
++		}
++
++		entries, err = fetchPage(entries[len(entries)-1].ID)
++		if err != nil {
++			// Headers are already sent: the truncated (invalid) JSON signals the failure.
++			slog.Error("Unable to fetch starred entries for export", slog.Int64("user_id", userID), slog.Any("error", err))
++			return
++		}
++	}
++
++	if separator == "[" {
++		separator = "[]"
++	} else {
++		separator = "]"
++	}
++	io.WriteString(w, separator)
++}
++
+ func (h *handler) flushHistoryHandler(w http.ResponseWriter, r *http.Request) {
+ 	loggedUserID := request.UserID(r)
+ 	go h.store.FlushHistory(loggedUserID)

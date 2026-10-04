@@ -1,0 +1,229 @@
+diff --git a/app/controllers/messages/edits_controller.rb b/app/controllers/messages/edits_controller.rb
+new file mode 100644
+index 0000000..a50cf79
+--- /dev/null
++++ b/app/controllers/messages/edits_controller.rb
+@@ -0,0 +1,17 @@
++class Messages::EditsController < ApplicationController
++  before_action :ensure_administrator
++  before_action :set_message
++
++  def index
++    @edits = @message.edits.latest_first.includes(:editor)
++  end
++
++  private
++    def ensure_administrator
++      head :forbidden unless Current.user.administrator?
++    end
++
++    def set_message
++      @message = Current.user.reachable_messages.find(params[:message_id])
++    end
++end
+diff --git a/app/controllers/messages_controller.rb b/app/controllers/messages_controller.rb
+index 4cbc771..bfcbe77 100644
+--- a/app/controllers/messages_controller.rb
++++ b/app/controllers/messages_controller.rb
+@@ -34,7 +34,7 @@ class MessagesController < ApplicationController
+   end
+ 
+   def update
+-    @message.update!(message_params)
++    @message.revise!(message_params)
+ 
+     @message.broadcast_replace_to @room, :messages, target: [ @message, :presentation ], partial: "messages/presentation", attributes: { maintain_scroll: true }
+ 
+diff --git a/app/models/message.rb b/app/models/message.rb
+index e607f6a..9cf95b2 100644
+--- a/app/models/message.rb
++++ b/app/models/message.rb
+@@ -5,6 +5,7 @@ class Message < ApplicationRecord
+   belongs_to :creator, class_name: "User", default: -> { Current.user }
+ 
+   has_many :boosts, dependent: :destroy
++  has_many :edits, class_name: "Message::Edit", dependent: :destroy
+ 
+   has_rich_text :body
+ 
+@@ -24,6 +25,15 @@ class Message < ApplicationRecord
+     body.to_plain_text.presence || attachment&.filename&.to_s || ""
+   end
+ 
++  def revise!(attributes)
++    previous_body = body.to_plain_text
++
++    transaction do
++      update!(attributes)
++      edits.create!(body: previous_body) if body.to_plain_text != previous_body
++    end
++  end
++
+   def to_key
+     [ client_message_id ]
+   end
+diff --git a/app/models/message/edit.rb b/app/models/message/edit.rb
+new file mode 100644
+index 0000000..d8f0e28
+--- /dev/null
++++ b/app/models/message/edit.rb
+@@ -0,0 +1,6 @@
++class Message::Edit < ApplicationRecord
++  belongs_to :message
++  belongs_to :editor, class_name: "User", default: -> { Current.user }
++
++  scope :latest_first, -> { order(created_at: :desc, id: :desc) }
++end
+diff --git a/app/views/messages/edits/index.html.erb b/app/views/messages/edits/index.html.erb
+new file mode 100644
+index 0000000..8812eac
+--- /dev/null
++++ b/app/views/messages/edits/index.html.erb
+@@ -0,0 +1,14 @@
++<h2>Edit history</h2>
++
++<% if @edits.any? %>
++  <% @edits.each do |edit| %>
++    <div class="pad-block-half border-bottom">
++      <small>
++        <strong><%= edit.editor.name %></strong> replaced this on <%= local_datetime_tag edit.created_at, style: :datetime %>
++      </small>
++      <%= simple_format h(edit.body) %>
++    </div>
++  <% end %>
++<% else %>
++  <p>This message has never been edited.</p>
++<% end %>
+diff --git a/config/routes.rb b/config/routes.rb
+index cb9dd1a..2a271f1 100644
+--- a/config/routes.rb
++++ b/config/routes.rb
+@@ -88,6 +88,7 @@ Rails.application.routes.draw do
+   resources :messages do
+     scope module: "messages" do
+       resources :boosts
++      resources :edits, only: :index
+     end
+   end
+ 
+diff --git a/db/migrate/20260101000000_create_message_edits.rb b/db/migrate/20260101000000_create_message_edits.rb
+new file mode 100644
+index 0000000..cef003a
+--- /dev/null
++++ b/db/migrate/20260101000000_create_message_edits.rb
+@@ -0,0 +1,11 @@
++class CreateMessageEdits < ActiveRecord::Migration[8.2]
++  def change
++    create_table :message_edits do |t|
++      t.references :message, null: false, foreign_key: true
++      t.references :editor, null: false, foreign_key: { to_table: :users }
++      t.text :body, null: false
++
++      t.timestamps
++    end
++  end
++end
+diff --git a/db/schema.rb b/db/schema.rb
+index e7f1540..8e2055b 100644
+--- a/db/schema.rb
++++ b/db/schema.rb
+@@ -10,7 +10,7 @@
+ #
+ # It's strongly recommended that you check this file into your version control system.
+ 
+-ActiveRecord::Schema[8.2].define(version: 2025_12_12_154340) do
++ActiveRecord::Schema[8.2].define(version: 2026_01_01_000000) do
+   create_table "accounts", force: :cascade do |t|
+     t.datetime "created_at", null: false
+     t.text "custom_styles"
+@@ -94,6 +94,16 @@ ActiveRecord::Schema[8.2].define(version: 2025_12_12_154340) do
+     t.index ["user_id"], name: "index_memberships_on_user_id"
+   end
+ 
++  create_table "message_edits", force: :cascade do |t|
++    t.text "body", null: false
++    t.datetime "created_at", null: false
++    t.integer "editor_id", null: false
++    t.integer "message_id", null: false
++    t.datetime "updated_at", null: false
++    t.index ["editor_id"], name: "index_message_edits_on_editor_id"
++    t.index ["message_id"], name: "index_message_edits_on_message_id"
++  end
++
+   create_table "messages", force: :cascade do |t|
+     t.string "client_message_id", null: false
+     t.datetime "created_at", null: false
+@@ -170,6 +180,8 @@ ActiveRecord::Schema[8.2].define(version: 2025_12_12_154340) do
+   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
+   add_foreign_key "bans", "users"
+   add_foreign_key "boosts", "messages"
++  add_foreign_key "message_edits", "messages"
++  add_foreign_key "message_edits", "users", column: "editor_id"
+   add_foreign_key "messages", "rooms"
+   add_foreign_key "messages", "users", column: "creator_id"
+   add_foreign_key "push_subscriptions", "users"
+diff --git a/test/controllers/messages/edits_controller_test.rb b/test/controllers/messages/edits_controller_test.rb
+new file mode 100644
+index 0000000..7a7cc57
+--- /dev/null
++++ b/test/controllers/messages/edits_controller_test.rb
+@@ -0,0 +1,25 @@
++require "test_helper"
++
++class Messages::EditsControllerTest < ActionDispatch::IntegrationTest
++  setup do
++    @message = messages(:first)
++  end
++
++  test "administrators see the original text" do
++    sign_in :david
++    @message.edits.create!(editor: users(:jason), body: "Original words")
++
++    get message_edits_url(@message)
++
++    assert_response :success
++    assert_match "Original words", response.body
++  end
++
++  test "non-administrators are forbidden" do
++    sign_in :jz
++
++    get message_edits_url(@message)
++
++    assert_response :forbidden
++  end
++end
+diff --git a/test/models/message_test.rb b/test/models/message_test.rb
+index 3cd12c1..679b6d2 100644
+--- a/test/models/message_test.rb
++++ b/test/models/message_test.rb
+@@ -27,6 +27,29 @@ class MessageTest < ActiveSupport::TestCase
+     assert_equal [], message_mentioning_a_non_member.mentionees
+   end
+ 
++  test "revising the body keeps the previous text" do
++    message = messages(:first)
++    original = message.plain_text_body
++
++    Current.set(user: users(:david)) do
++      assert_difference -> { message.edits.count }, 1 do
++        message.revise!(body: "Something new")
++      end
++    end
++
++    edit = message.edits.last
++    assert_equal original, edit.body
++    assert_equal users(:david), edit.editor
++  end
++
++  test "revising without changing the body records nothing" do
++    message = messages(:first)
++
++    assert_no_difference -> { message.edits.count } do
++      message.revise!(body: message.body.to_s)
++    end
++  end
++
+   private
+     def create_new_message_in(room)
+       room.messages.create!(creator: users(:jason), body: "Hello", client_message_id: "123")

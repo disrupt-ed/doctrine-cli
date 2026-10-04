@@ -1,0 +1,28 @@
+diff --git a/app/controllers/users/sidebars_controller.rb b/app/controllers/users/sidebars_controller.rb
+index 2af8050..7d116ca 100644
+--- a/app/controllers/users/sidebars_controller.rb
++++ b/app/controllers/users/sidebars_controller.rb
+@@ -2,16 +2,18 @@ class Users::SidebarsController < ApplicationController
+   DIRECT_PLACEHOLDERS = 20
+ 
+   def show
+-    all_memberships     = Current.user.memberships.visible.with_ordered_room
+-    @direct_memberships = extract_direct_memberships(all_memberships)
+-    @other_memberships  = all_memberships.without(@direct_memberships)
++    direct, other = Current.user.memberships.visible.with_ordered_room.partition { |m| m.room.direct? }
++
++    @direct_memberships = direct.sort_by { |m| m.room.updated_at }.reverse
++    @other_memberships  = other
++    preload_direct_room_users(@direct_memberships)
+ 
+     @direct_placeholder_users = find_direct_placeholder_users
+   end
+ 
+   private
+-    def extract_direct_memberships(all_memberships)
+-      all_memberships.select { |m| m.room.direct? }.sort_by { |m| m.room.updated_at }.reverse
++    def preload_direct_room_users(memberships)
++      ActiveRecord::Associations::Preloader.new(records: memberships.map(&:room), associations: :users).call
+     end
+ 
+     def find_direct_placeholder_users

@@ -1,0 +1,162 @@
+diff --git a/internal/reader/fetcher/retry.go b/internal/reader/fetcher/retry.go
+new file mode 100644
+index 00000000..f661577d
+--- /dev/null
++++ b/internal/reader/fetcher/retry.go
+@@ -0,0 +1,63 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package fetcher // import "miniflux.app/v2/internal/reader/fetcher"
++
++import (
++	"errors"
++	"io"
++	"log/slog"
++	"net"
++	"net/http"
++	"os"
++	"time"
++)
++
++const maxRequestAttempts = 3
++
++// retryBaseDelay is the wait before the first retry. It doubles after each
++// failed attempt. It is a variable so tests can shorten it.
++var retryBaseDelay = 1 * time.Second
++
++// ExecuteRequestWithRetry behaves like ExecuteRequest, but retries when the
++// request fails with a temporary error (timeout, dropped connection, 502, 503
++// or 504), waiting 1s, then 2s, between attempts.
++func (r *RequestBuilder) ExecuteRequestWithRetry(requestURL string) (*http.Response, error) {
++	delay := retryBaseDelay
++	for attempt := 1; ; attempt++ {
++		resp, err := r.ExecuteRequest(requestURL)
++		if attempt == maxRequestAttempts || !isTemporaryFailure(resp, err) {
++			return resp, err
++		}
++
++		slog.Warn("Temporary fetch failure, retrying",
++			slog.String("url", requestURL),
++			slog.Int("attempt", attempt),
++			slog.Duration("retry_in", delay),
++			slog.Any("error", err),
++		)
++
++		if resp != nil {
++			resp.Body.Close()
++		}
++		time.Sleep(delay)
++		delay *= 2
++	}
++}
++
++func isTemporaryFailure(resp *http.Response, err error) bool {
++	if err != nil {
++		if isSSLError(err) || errors.Is(err, ErrPrivateNetworkHost) {
++			return false
++		}
++
++		_, isOpError := errors.AsType[*net.OpError](err)
++		return isOpError || os.IsTimeout(err) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
++	}
++
++	switch resp.StatusCode {
++	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
++		return true
++	}
++	return false
++}
+diff --git a/internal/reader/fetcher/retry_test.go b/internal/reader/fetcher/retry_test.go
+new file mode 100644
+index 00000000..ba5c3022
+--- /dev/null
++++ b/internal/reader/fetcher/retry_test.go
+@@ -0,0 +1,65 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package fetcher // import "miniflux.app/v2/internal/reader/fetcher"
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++)
++
++func TestExecuteRequestWithRetry(t *testing.T) {
++	retryBaseDelay = time.Millisecond
++	t.Cleanup(func() { retryBaseDelay = time.Second })
++
++	tests := []struct {
++		name         string
++		statuses     []int
++		wantStatus   int
++		wantRequests int
++	}{
++		{"recovers after temporary errors", []int{503, 502, 200}, 200, 3},
++		{"gives up after max attempts", []int{503, 503, 503, 200}, 503, 3},
++		{"does not retry permanent errors", []int{404, 200}, 404, 1},
++		{"does not retry rate limiting", []int{429, 200}, 429, 1},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			requests := 0
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				w.WriteHeader(tt.statuses[requests])
++				requests++
++			}))
++			defer server.Close()
++
++			resp, err := NewRequestBuilder().ExecuteRequestWithRetry(server.URL)
++			if err != nil {
++				t.Fatalf("unexpected error: %v", err)
++			}
++			defer resp.Body.Close()
++
++			if resp.StatusCode != tt.wantStatus {
++				t.Errorf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
++			}
++			if requests != tt.wantRequests {
++				t.Errorf("requests = %d, want %d", requests, tt.wantRequests)
++			}
++		})
++	}
++}
++
++func TestExecuteRequestWithRetryConnectionRefused(t *testing.T) {
++	retryBaseDelay = time.Millisecond
++	t.Cleanup(func() { retryBaseDelay = time.Second })
++
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
++	serverURL := server.URL
++	server.Close()
++
++	if _, err := NewRequestBuilder().ExecuteRequestWithRetry(serverURL); err == nil {
++		t.Fatal("expected an error")
++	}
++}
+diff --git a/internal/reader/handler/handler.go b/internal/reader/handler/handler.go
+index 01ced0da..30843df5 100644
+--- a/internal/reader/handler/handler.go
++++ b/internal/reader/handler/handler.go
+@@ -132,7 +132,7 @@ func CreateFeed(store *storage.Storage, userID int64, feedCreationRequest *model
+ 		IgnoreTLSErrors(feedCreationRequest.AllowSelfSignedCertificates).
+ 		DisableHTTP2(feedCreationRequest.DisableHTTP2)
+ 
+-	responseHandler := fetcher.NewResponseHandler(requestBuilder.ExecuteRequest(feedCreationRequest.FeedURL))
++	responseHandler := fetcher.NewResponseHandler(requestBuilder.ExecuteRequestWithRetry(feedCreationRequest.FeedURL))
+ 	defer responseHandler.Close()
+ 
+ 	if localizedError := responseHandler.LocalizedError(); localizedError != nil {
+@@ -248,7 +248,7 @@ func RefreshFeed(store *storage.Storage, userID, feedID int64, forceRefresh bool
+ 			WithLastModified(originalFeed.LastModifiedHeader)
+ 	}
+ 
+-	responseHandler := fetcher.NewResponseHandler(requestBuilder.ExecuteRequest(originalFeed.FeedURL))
++	responseHandler := fetcher.NewResponseHandler(requestBuilder.ExecuteRequestWithRetry(originalFeed.FeedURL))
+ 	defer responseHandler.Close()
+ 
+ 	if responseHandler.IsRateLimited() {

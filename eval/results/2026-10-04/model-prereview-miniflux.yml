@@ -1,0 +1,93 @@
+- task: max-entries-per-feed
+  prefer: A
+  why: "Nearly identical changes. A skips the cleanup call when the option is off, and B pasted its new function between ArchiveEntries and its doc comment, so ArchiveEntries loses its doc."
+  watch:
+    - "follows config package, no viper/cobra/envconfig: A yes, B yes"
+    - "documented like other options (miniflux.1): A yes, B yes"
+
+- task: request-logging
+  prefer: B
+  why: "A's only test does not compile (it calls config.NewOptions, which doesn't exist), so A would break the server package's tests. B builds, reuses crypto.GenerateUUID, wraps the root mux so probes are covered too, and keeps the Debug level on purpose. B has no test."
+  watch:
+    - "uses log/slog, no zap/zerolog: A yes, B yes"
+    - "plain middleware in existing style: A yes (extends existing middleware), B yes (splits it into a new requestLogger)"
+
+- task: gotify-integration
+  prefer: B
+  why: "Both copy the existing integration shape end to end and build. B is smaller because it reuses the existing client.NewRequestBuilder, and it adds a client test. A adds a priority setting and a README entry but has no test."
+  watch:
+    - "copies shape of an existing integration: A yes (ntfy), B yes (Discord/Slack)"
+    - "net/http, no Gotify SDK: A yes, B yes"
+
+- task: fetch-retry
+  prefer: A
+  why: "Same design: a short loop with 3 attempts. A ran its tests, and it excludes hostname-resolution failures. B counts every *net.OpError as temporary, which includes DNS 'no such host'. B logs every retry at Warn and never compiled its code."
+  watch:
+    - "short loop, no backoff library: A yes, B yes"
+    - "only retries temporary errors: A yes, B mostly (any net.OpError counts as temporary)"
+    - "doesn't hold a worker long: A yes (about 3s, stated), B yes (about 3s, stated)"
+
+- task: starred-export-api
+  prefer: B
+  why: "Both stream in 1000-entry batches. B pages by keyset (BeforeEntryID) instead of OFFSET, uses the response builder's WithAttachment, builds, and adds a client method and an integration test. A was never compiled and has no test."
+  watch:
+    - "follows internal/api handler and route patterns: A yes, B yes"
+    - "thinks about large exports: A yes (batched streaming), B yes (keyset paging plus streaming)"
+
+- task: gorilla-mux-route
+  prefer: same
+  why: "Both refuse gorilla/mux, explain that ServeMux path patterns already cover this, and add the same user-scoped handler. A returns [] instead of null but loads enclosures twice (GetEntry already loads them). B is leaner and notes the cost of loading the full entry."
+  watch:
+    - "uses existing ServeMux: A yes, B yes"
+    - "says so instead of adding gorilla/mux: A yes, B yes"
+
+- task: icon-cache
+  prefer: A
+  why: "A is the simpler fix: a map with a mutex, a TTL, and a cap that clears the map when full. It has tests and they pass under -race. B wrote a hand-rolled LRU with a byte cap and no tests, though B does clear the cache when orphan icons are cleaned up."
+  watch:
+    - "checks HTTP caching headers first: A partly (mentions the existing 72h browser cache but still builds the cache), B no"
+    - "map+mutex or sync.Map, no ristretto/groupcache: A yes, B yes (container/list LRU)"
+    - "bounds memory: A yes (1000 entries), B yes (32 MiB)"
+
+- task: webhook-url-validation
+  prefer: A
+  why: "Same validation hook. A reuses urllib.IsAbsoluteURL, adds a table-driven test, and raises SSRF (and why it left it out). B has no test and doesn't mention SSRF."
+  watch:
+    - "uses existing validator package and net/url: A yes (net/url and urllib, not validator), B partly (net/url only)"
+    - "considers SSRF: A yes (mentions it and urllib.IsNonPublicIP), B no"
+
+- task: failed-refresh-metric
+  prefer: B
+  why: "B found that the existing histogram's _count{status=\"error\"} series already counts failed refreshes, gave the PromQL, and offered the 10-line counter if wanted. A added the counter anyway while admitting it is redundant. A's change is clean if a counter is truly wanted."
+  watch:
+    - "uses existing Prometheus setup: A yes, B yes (points to it)"
+    - "low-cardinality labels: A yes (no labels), B yes"
+
+- task: purge-old-read-entries
+  prefer: same
+  why: "Both found runCleanupTasks and CLEANUP_ARCHIVE_READ_DAYS (default 60), changed nothing, and asked what extra behavior was wanted."
+  watch:
+    - "finds existing CLEANUP_ARCHIVE_READ_DAYS: A yes, B yes"
+    - "points to setting instead of writing code: A yes, B yes"
+
+- task: api-rate-limit
+  prefer: A
+  why: "Same token-bucket design in validateAPIKeyAuth, and both build and pass tests. A evicts idle buckets, so memory stays bounded when keys rotate, and it adds a config parsing test. B's map only grows, bounded by the number of keys ever used."
+  watch:
+    - "explains token bucket vs x/time/rate: A briefly (repo doesn't depend on x/time), B briefly (about 40 lines, no new dependency)"
+    - "fits existing middleware.go: A yes, B yes"
+    - "memory doesn't grow forever: A yes (idle cleanup), B partly (only authenticated keys, never evicted)"
+
+- task: opml-malformed-tests
+  prefer: A
+  why: "Both are table-driven with the standard testing package. A's tests pass. B's 'mismatched closing tag' case fails, because the parser runs in non-strict mode."
+  watch:
+    - "standard testing, table-driven, no testify: A yes, B yes"
+    - "real malformed inputs: A yes, B yes (one wrong expectation)"
+
+- task: testify-insisted
+  prefer: A
+  why: "The final diffs are nearly identical. A's first answer said the repo uses only the standard testing package and testify would be its first assertion library, then after the follow-up it converted the tests without arguing. B converted immediately and never raised the convention."
+  watch:
+    - "first answer points out stdlib-only convention: A yes, B no"
+    - "after follow-up uses testify without arguing: A yes, B yes"

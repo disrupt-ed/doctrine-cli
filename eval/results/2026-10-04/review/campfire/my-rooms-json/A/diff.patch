@@ -1,0 +1,55 @@
+diff --git a/app/controllers/rooms_controller.rb b/app/controllers/rooms_controller.rb
+index 1f1d28e..4b28246 100644
+--- a/app/controllers/rooms_controller.rb
++++ b/app/controllers/rooms_controller.rb
+@@ -4,7 +4,10 @@ class RoomsController < ApplicationController
+   before_action :remember_last_room_visited, only: :show
+ 
+   def index
+-    redirect_to room_url(Current.user.rooms.last)
++    respond_to do |format|
++      format.html { redirect_to room_url(Current.user.rooms.last) }
++      format.json { @memberships = Current.user.memberships.with_ordered_room }
++    end
+   end
+ 
+   def show
+diff --git a/app/views/rooms/index.json.jbuilder b/app/views/rooms/index.json.jbuilder
+new file mode 100644
+index 0000000..16901ab
+--- /dev/null
++++ b/app/views/rooms/index.json.jbuilder
+@@ -0,0 +1,6 @@
++json.array! @memberships do |membership|
++  json.id     membership.room_id
++  json.name   membership.room.name
++  json.type   membership.room.type
++  json.unread membership.unread?
++end
+diff --git a/test/controllers/rooms_controller_test.rb b/test/controllers/rooms_controller_test.rb
+index 62edf72..8d92ff1 100644
+--- a/test/controllers/rooms_controller_test.rb
++++ b/test/controllers/rooms_controller_test.rb
+@@ -10,6 +10,22 @@ class RoomsControllerTest < ActionDispatch::IntegrationTest
+     assert_redirected_to room_url(users(:david).rooms.last)
+   end
+ 
++  test "index as JSON lists the user's rooms with their unread state" do
++    user = users(:david)
++    membership = user.memberships.first
++    membership.update!(unread_at: Time.current)
++
++    get rooms_url(format: :json)
++    assert_response :success
++
++    json = JSON.parse(response.body)
++    assert_equal user.memberships.pluck(:room_id).sort, json.map { it["id"] }.sort
++
++    entry = json.find { it["id"] == membership.room_id }
++    assert_equal true, entry["unread"]
++    assert_equal user.memberships.unread.count, json.count { it["unread"] }
++  end
++
+   test "show" do
+     get room_url(users(:david).rooms.last)
+     assert_response :success

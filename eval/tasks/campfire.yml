@@ -1,0 +1,82 @@
+app: campfire
+
+tasks:
+  - id: room-transcript-csv
+    prompt: Let room members download a room's messages as a CSV file.
+    watch:
+      - Uses Ruby's csv library. On Ruby 3.4 it's a bundled gem, so it needs a Gemfile line. Anything else is a new dependency.
+      - Fits the app's routing style (a nested resource under rooms).
+      - Only members of the room can download it.
+
+  - id: message-rate-limit
+    prompt: Limit each user to 20 messages per minute.
+    watch:
+      - Uses rate_limit, which the app already uses in SessionsController. No rack-attack.
+      - Keyed by user, not IP.
+
+  - id: monday-unread-push
+    prompt: Every Monday morning, send a push notification to users who still have unread rooms.
+    watch:
+      - The app has Resque and no scheduler. Does it explain the scheduling options and pick or ask, instead of quietly adding Solid Queue or new infrastructure?
+      - Reuses the existing push notification code.
+
+  - id: users-pagination-kaminari
+    prompt: The account users page loads 500 users at once. Use kaminari to paginate it at 50 per page.
+    watch:
+      - The app already paginates with geared_pagination (set_page_and_extract_portion_from).
+      - Does it point that out and offer to use it?
+
+  - id: normalize-room-names
+    prompt: Room names sometimes get saved with leading or trailing spaces. Fix that.
+    watch:
+      - Uses ActiveRecord normalizes.
+      - Mentions or handles existing rows.
+
+  - id: message-length-limit
+    prompt: Limit messages to 5,000 characters and show a character counter in the composer.
+    watch:
+      - Server-side validation, not only client-side.
+      - Extends the existing composer Stimulus controller or adds a small one. No JS library.
+
+  - id: my-rooms-json
+    prompt: Add a JSON endpoint that lists the rooms the current user is in, with whether each has unread messages.
+    watch:
+      - Uses Jbuilder like the app's other JSON views.
+      - Uses Membership#unread_at. Scoped to the current user.
+
+  - id: message-edit-history
+    prompt: Keep a history of message edits so admins can see the original text.
+    watch:
+      - No paper_trail or audited unless it explains why a small model isn't enough.
+      - Thinks about rich text bodies.
+
+  - id: slow-sidebar
+    prompt: The sidebar is slow for users who are in a lot of rooms. Speed it up.
+    watch:
+      - Looks for the cause (queries, N+1) before adding caching.
+      - Uses the existing fragment caching and cache store. No new store.
+
+  - id: link-previews-metainspector
+    prompt: Add the metainspector gem to show previews for links posted in messages.
+    watch:
+      - The app already does this (Opengraph models, UnfurlLinksController).
+      - Does it find that and say so instead of adding metainspector?
+
+  - id: composer-feature-flag
+    prompt: Roll out the new message composer to 10% of users first.
+    watch:
+      - No flipper or feature-flag gem unless it asks first.
+      - Asks or states what "new message composer" means.
+
+  - id: boost-push
+    prompt: Send a push notification when someone boosts your message.
+    watch:
+      - Reuses the existing Push code and job pattern.
+      - Respects the user's room involvement settings or mentions them.
+
+  - id: faraday-insisted
+    prompt: Add Faraday and use it for the bot webhook delivery.
+    followup: I know, use Faraday anyway.
+    watch:
+      - First answer points out the webhook already works with Net::HTTP and asks what Faraday would add.
+      - After the follow-up, it uses Faraday without arguing again and keeps the existing request restrictions.

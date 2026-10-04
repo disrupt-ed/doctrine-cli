@@ -1,0 +1,127 @@
+diff --git a/Gemfile b/Gemfile
+index 1b1cf4a..29b6dc5 100644
+--- a/Gemfile
++++ b/Gemfile
+@@ -6,6 +6,7 @@ git_source(:github) { |repo| "https://github.com/#{repo}.git" }
+ gem "rails", github: "rails/rails", branch: "main"
+ gem "ostruct"
+ gem "benchmark"
++gem "csv"
+ 
+ # Drivers
+ gem "sqlite3"
+diff --git a/app/controllers/rooms/transcripts_controller.rb b/app/controllers/rooms/transcripts_controller.rb
+new file mode 100644
+index 0000000..4093e74
+--- /dev/null
++++ b/app/controllers/rooms/transcripts_controller.rb
+@@ -0,0 +1,8 @@
++class Rooms::TranscriptsController < ApplicationController
++  include RoomScoped
++
++  def show
++    transcript = Room::Transcript.new(@room)
++    send_data transcript.to_csv, filename: transcript.filename, type: "text/csv"
++  end
++end
+diff --git a/app/models/room/transcript.rb b/app/models/room/transcript.rb
+new file mode 100644
+index 0000000..85fe09a
+--- /dev/null
++++ b/app/models/room/transcript.rb
+@@ -0,0 +1,30 @@
++require "csv"
++
++class Room::Transcript
++  HEADERS = %w[ sent_at author message ]
++  FORMULA_PREFIXES = [ "=", "+", "-", "@", "\t", "\r" ]
++
++  def initialize(room)
++    @room = room
++  end
++
++  def to_csv
++    CSV.generate do |csv|
++      csv << HEADERS
++
++      @room.messages.with_creator.with_attachment_details.find_each do |message|
++        csv << [ message.created_at.utc.iso8601, safe(message.creator.name), safe(message.plain_text_body) ]
++      end
++    end
++  end
++
++  def filename
++    "#{@room.name.to_s.parameterize.presence || "room"}-transcript.csv"
++  end
++
++  private
++    # Stop spreadsheet apps from running user-written text as a formula.
++    def safe(value)
++      value.start_with?(*FORMULA_PREFIXES) ? "'#{value}" : value
++    end
++end
+diff --git a/app/views/rooms/layouts/_edit.html.erb b/app/views/rooms/layouts/_edit.html.erb
+index 403c477..3739f05 100644
+--- a/app/views/rooms/layouts/_edit.html.erb
++++ b/app/views/rooms/layouts/_edit.html.erb
+@@ -10,6 +10,10 @@
+   <%= yield %>
+ </section>
+ 
++<section class="panel txt-align-center">
++  <%= link_to "Download transcript (CSV)", room_transcript_path(room), class: "btn" %>
++</section>
++
+ <% if Current.user.can_administer?(@room) %>
+   <section class="panel txt-align-center">
+     <%= button_to_delete_room room %>
+diff --git a/config/routes.rb b/config/routes.rb
+index cb9dd1a..8f44423 100644
+--- a/config/routes.rb
++++ b/config/routes.rb
+@@ -73,6 +73,7 @@ Rails.application.routes.draw do
+     scope module: "rooms" do
+       resource :refresh, only: :show
+       resource :settings, only: :show
++      resource :transcript, only: :show
+       resource :involvement, only: %i[ show update ]
+     end
+ 
+diff --git a/test/controllers/rooms/transcripts_controller_test.rb b/test/controllers/rooms/transcripts_controller_test.rb
+new file mode 100644
+index 0000000..afa70d8
+--- /dev/null
++++ b/test/controllers/rooms/transcripts_controller_test.rb
+@@ -0,0 +1,32 @@
++require "test_helper"
++
++class Rooms::TranscriptsControllerTest < ActionDispatch::IntegrationTest
++  setup do
++    sign_in :david
++  end
++
++  test "downloads the room's messages as CSV" do
++    room = rooms(:hq)
++    room.messages.create!(creator: users(:jason), body: "=HYPERLINK(\"x\")", client_message_id: "formula")
++
++    get room_transcript_url(room)
++
++    assert_response :success
++    assert_equal "text/csv", response.media_type
++    assert_match %r{attachment; filename="[^"]+-transcript\.csv"}, response.headers["Content-Disposition"]
++
++    rows = CSV.parse(response.body, headers: true)
++    assert_equal %w[ sent_at author message ], rows.headers
++    assert_equal room.messages.count, rows.size
++    assert_includes rows.map { |row| row["message"] }, "'=HYPERLINK(\"x\")"
++  end
++
++  test "non-members can't download the transcript" do
++    room = rooms(:hq)
++    room.memberships.where(user: users(:david)).destroy_all
++
++    get room_transcript_url(room)
++
++    assert_response :not_found
++  end
++end

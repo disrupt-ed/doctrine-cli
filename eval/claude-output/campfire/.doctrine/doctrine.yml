@@ -1,0 +1,5 @@
+version: 1
+doctrines: 0.1
+
+extends:
+  - rails/default

@@ -1,0 +1,112 @@
+diff --git a/app/jobs/push/unread_reminder_job.rb b/app/jobs/push/unread_reminder_job.rb
+new file mode 100644
+index 0000000..5fe5d43
+--- /dev/null
++++ b/app/jobs/push/unread_reminder_job.rb
+@@ -0,0 +1,5 @@
++class Push::UnreadReminderJob < ApplicationJob
++  def perform
++    Push::UnreadReminder.new.deliver
++  end
++end
+diff --git a/app/models/push/unread_reminder.rb b/app/models/push/unread_reminder.rb
+new file mode 100644
+index 0000000..a9e3a9a
+--- /dev/null
++++ b/app/models/push/unread_reminder.rb
+@@ -0,0 +1,24 @@
++class Push::UnreadReminder
++  def deliver
++    unread_counts.each do |user_id, count|
++      payload = build_payload(count)
++      Rails.configuration.x.web_push_pool.queue(payload, Push::Subscription.where(user_id: user_id))
++    end
++  end
++
++  private
++    def unread_counts
++      Membership.visible.unread
++        .joins(:user).merge(User.active)
++        .where(user_id: Push::Subscription.select(:user_id))
++        .group(:user_id).count
++    end
++
++    def build_payload(count)
++      {
++        title: "Unread rooms",
++        body: "You have #{count} #{"room".pluralize(count)} with unread messages",
++        path: Rails.application.routes.url_helpers.root_path
++      }
++    end
++end
+diff --git a/lib/tasks/push.rake b/lib/tasks/push.rake
+new file mode 100644
+index 0000000..f82a496
+--- /dev/null
++++ b/lib/tasks/push.rake
+@@ -0,0 +1,6 @@
++namespace :push do
++  desc "Enqueue the unread rooms reminder. Schedule for Monday morning, e.g. `0 9 * * 1`"
++  task unread_reminders: :environment do
++    Push::UnreadReminderJob.perform_later
++  end
++end
+diff --git a/test/models/push/unread_reminder_test.rb b/test/models/push/unread_reminder_test.rb
+new file mode 100644
+index 0000000..3fc521e
+--- /dev/null
++++ b/test/models/push/unread_reminder_test.rb
+@@ -0,0 +1,53 @@
++require "test_helper"
++
++class Push::UnreadReminderTest < ActiveSupport::TestCase
++  setup do
++    stub_web_push_dns_resolution
++    Membership.update_all(unread_at: nil)
++  end
++
++  test "notifies subscribed users with unread rooms" do
++    memberships(:kevin_designers).update!(unread_at: Time.current)
++
++    expected = users(:kevin).push_subscriptions.count
++    assert_operator expected, :>, 0
++
++    WebPush.expects(:payload_send).times(expected)
++    Push::UnreadReminder.new.deliver
++    wait_for_deliveries(expected)
++  end
++
++  test "does not notify users without unread rooms" do
++    WebPush.expects(:payload_send).never
++    Push::UnreadReminder.new.deliver
++    sleep 0.05
++  end
++
++  test "does not notify users with unread rooms but no subscriptions" do
++    user = users(:kevin)
++    user.push_subscriptions.delete_all
++    memberships(:kevin_designers).update!(unread_at: Time.current)
++
++    WebPush.expects(:payload_send).never
++    Push::UnreadReminder.new.deliver
++    sleep 0.05
++  end
++
++  test "does not notify for invisible memberships" do
++    memberships(:kevin_designers).update!(unread_at: Time.current, involvement: :invisible)
++
++    WebPush.expects(:payload_send).never
++    Push::UnreadReminder.new.deliver
++    sleep 0.05
++  end
++
++  private
++    def wait_for_deliveries(count)
++      pool = Rails.configuration.x.web_push_pool.delivery_pool
++      start = Time.now
++      while pool.completed_task_count < count
++        raise "Timeout waiting for pool tasks to complete" if Time.now - start > 0.5
++        sleep 0.02
++      end
++    end
++end

@@ -1,0 +1,111 @@
+diff --git a/app/controllers/rooms/transcripts_controller.rb b/app/controllers/rooms/transcripts_controller.rb
+new file mode 100644
+index 0000000..1ba3197
+--- /dev/null
++++ b/app/controllers/rooms/transcripts_controller.rb
+@@ -0,0 +1,37 @@
++class Rooms::TranscriptsController < ApplicationController
++  include RoomScoped
++
++  HEADERS = %w[ id sent_at author body attachment ]
++  FORMULA_PREFIXES = %w[ = + - @ ]
++
++  def show
++    send_data transcript_csv,
++      type: "text/csv; charset=utf-8",
++      filename: "#{@room.name.to_s.parameterize.presence || "room-#{@room.id}"}-messages.csv",
++      disposition: "attachment"
++  end
++
++  private
++    def transcript_csv
++      rows = [ HEADERS ]
++
++      @room.messages.with_creator.with_attachment_details.find_each do |message|
++        rows << [
++          message.id,
++          message.created_at.utc.iso8601,
++          message.creator.name,
++          message.body.to_plain_text,
++          message.attachment? ? message.attachment.filename.to_s : nil
++        ]
++      end
++
++      "﻿" + rows.map { |row| row.map { |field| csv_field(field) }.join(",") }.join("\r\n") + "\r\n"
++    end
++
++    # Quote every field, and defuse values a spreadsheet would otherwise evaluate as formulas.
++    def csv_field(value)
++      value = value.to_s
++      value = "'#{value}" if value.start_with?(*FORMULA_PREFIXES, "\t", "\r")
++      %("#{value.gsub('"', '""')}")
++    end
++end
+diff --git a/app/views/rooms/layouts/_edit.html.erb b/app/views/rooms/layouts/_edit.html.erb
+index 403c477..ccf41ae 100644
+--- a/app/views/rooms/layouts/_edit.html.erb
++++ b/app/views/rooms/layouts/_edit.html.erb
+@@ -10,6 +10,10 @@
+   <%= yield %>
+ </section>
+ 
++<section class="panel txt-align-center">
++  <%= link_to "Download messages (CSV)", room_transcript_path(room, format: :csv), class: "btn max-width", data: { turbo: false } %>
++</section>
++
+ <% if Current.user.can_administer?(@room) %>
+   <section class="panel txt-align-center">
+     <%= button_to_delete_room room %>
+diff --git a/config/routes.rb b/config/routes.rb
+index cb9dd1a..73951cf 100644
+--- a/config/routes.rb
++++ b/config/routes.rb
+@@ -74,6 +74,7 @@ Rails.application.routes.draw do
+       resource :refresh, only: :show
+       resource :settings, only: :show
+       resource :involvement, only: %i[ show update ]
++      resource :transcript, only: :show
+     end
+ 
+     get "@:message_id", to: "rooms#show", as: :at_message
+diff --git a/test/controllers/rooms/transcripts_controller_test.rb b/test/controllers/rooms/transcripts_controller_test.rb
+new file mode 100644
+index 0000000..43c4d4c
+--- /dev/null
++++ b/test/controllers/rooms/transcripts_controller_test.rb
+@@ -0,0 +1,35 @@
++require "test_helper"
++
++class Rooms::TranscriptsControllerTest < ActionDispatch::IntegrationTest
++  setup do
++    sign_in :david
++  end
++
++  test "member downloads the room's messages as CSV" do
++    rooms(:hq).messages.create!(creator: users(:jason), body: "Hello, \"world\"", client_message_id: "csv1")
++
++    get room_transcript_url(rooms(:hq), format: :csv)
++
++    assert_response :success
++    assert_equal "text/csv; charset=utf-8", response.content_type
++    assert_match(/attachment/, response.headers["Content-Disposition"])
++    assert_includes response.body, %("Hello, ""world""")
++    assert_includes response.body, %("#{users(:jason).name}")
++  end
++
++  test "formula-like values are neutralized" do
++    rooms(:hq).messages.create!(creator: users(:jason), body: "=1+1", client_message_id: "csv2")
++
++    get room_transcript_url(rooms(:hq), format: :csv)
++
++    assert_includes response.body, %("'=1+1")
++  end
++
++  test "non-members can't download" do
++    rooms(:hq).memberships.where(user: users(:david)).destroy_all
++
++    get room_transcript_url(rooms(:hq), format: :csv)
++
++    assert_response :not_found
++  end
++end

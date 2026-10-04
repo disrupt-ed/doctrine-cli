@@ -1,0 +1,1004 @@
+diff --git a/README.md b/README.md
+index fb191205..e18aa617 100644
+--- a/README.md
++++ b/README.md
+@@ -72,7 +72,7 @@ Features
+ 
+ ### Integrations
+ 
+-- 25+ integrations with third-party services: [Apprise](https://github.com/caronc/apprise), [Betula](https://sr.ht/~bouncepaw/betula/), [Cubox](https://cubox.cc/), [Discord](https://discord.com/), [Espial](https://github.com/jonschoning/espial), [Instapaper](https://www.instapaper.com/), [LinkAce](https://www.linkace.org/), [Linkding](https://github.com/sissbruecker/linkding), [LinkTaco](https://linktaco.com), [LinkWarden](https://linkwarden.app/), [Matrix](https://matrix.org), [Notion](https://www.notion.com/), [Ntfy](https://ntfy.sh/), [Nunux Keeper](https://keeper.nunux.org/), [Pinboard](https://pinboard.in/), [Pushover](https://pushover.net), [RainDrop](https://raindrop.io/), [Readeck](https://readeck.org/en/), [Readwise Reader](https://readwise.io/read), [RssBridge](https://rss-bridge.org/), [Shaarli](https://github.com/shaarli/Shaarli), [Shiori](https://github.com/go-shiori/shiori), [Slack](https://slack.com/), [Telegram](https://telegram.org), [Wallabag](https://www.wallabag.org/), etc.
++- 25+ integrations with third-party services: [Apprise](https://github.com/caronc/apprise), [Betula](https://sr.ht/~bouncepaw/betula/), [Cubox](https://cubox.cc/), [Discord](https://discord.com/), [Espial](https://github.com/jonschoning/espial), [Gotify](https://gotify.net/), [Instapaper](https://www.instapaper.com/), [LinkAce](https://www.linkace.org/), [Linkding](https://github.com/sissbruecker/linkding), [LinkTaco](https://linktaco.com), [LinkWarden](https://linkwarden.app/), [Matrix](https://matrix.org), [Notion](https://www.notion.com/), [Ntfy](https://ntfy.sh/), [Nunux Keeper](https://keeper.nunux.org/), [Pinboard](https://pinboard.in/), [Pushover](https://pushover.net), [RainDrop](https://raindrop.io/), [Readeck](https://readeck.org/en/), [Readwise Reader](https://readwise.io/read), [RssBridge](https://rss-bridge.org/), [Shaarli](https://github.com/shaarli/Shaarli), [Shiori](https://github.com/go-shiori/shiori), [Slack](https://slack.com/), [Telegram](https://telegram.org), [Wallabag](https://www.wallabag.org/), etc.
+ - Bookmarklet for subscribing to websites directly from any web browser.
+ - Webhooks for real-time notifications or custom integrations.
+ - Compatibility with existing mobile applications using the Fever or Google Reader API.
+diff --git a/client/model.go b/client/model.go
+index ff1f444b..8a4bcd5d 100644
+--- a/client/model.go
++++ b/client/model.go
+@@ -182,6 +182,7 @@ type Feed struct {
+ 	NtfyPriority                int       `json:"ntfy_priority"`
+ 	NtfyTopic                   string    `json:"ntfy_topic"`
+ 	PushoverEnabled             bool      `json:"pushover_enabled"`
++	GotifyEnabled               bool      `json:"gotify_enabled"`
+ 	PushoverPriority            int       `json:"pushover_priority"`
+ 	Icon                        *FeedIcon `json:"icon"`
+ }
+diff --git a/internal/database/migrations.go b/internal/database/migrations.go
+index 23bb7d46..cfb185f4 100644
+--- a/internal/database/migrations.go
++++ b/internal/database/migrations.go
+@@ -1579,4 +1579,17 @@ var migrations = [...]func(tx *sql.Tx) error{
+ 		`)
+ 		return err
+ 	},
++	func(tx *sql.Tx) (err error) {
++		_, err = tx.Exec(`
++			ALTER TABLE integrations
++				ADD COLUMN gotify_enabled bool default 'f',
++				ADD COLUMN gotify_url text default '',
++				ADD COLUMN gotify_token text default '',
++				ADD COLUMN gotify_priority int default '5';
++
++			ALTER TABLE feeds
++				ADD COLUMN gotify_enabled bool default 'f';
++		`)
++		return err
++	},
+ }
+diff --git a/internal/integration/gotify/gotify.go b/internal/integration/gotify/gotify.go
+new file mode 100644
+index 00000000..e62be7c2
+--- /dev/null
++++ b/internal/integration/gotify/gotify.go
+@@ -0,0 +1,105 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package gotify // import "miniflux.app/v2/internal/integration/gotify"
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"log/slog"
++	"net/http"
++	"strings"
++	"time"
++
++	"miniflux.app/v2/internal/config"
++	"miniflux.app/v2/internal/http/client"
++	"miniflux.app/v2/internal/model"
++	"miniflux.app/v2/internal/version"
++)
++
++const defaultClientTimeout = 10 * time.Second
++
++type Client struct {
++	gotifyURL, gotifyToken string
++	gotifyPriority         int
++}
++
++// See https://gotify.net/docs/pushmsg
++type message struct {
++	Title    string         `json:"title"`
++	Message  string         `json:"message"`
++	Priority int            `json:"priority"`
++	Extras   map[string]any `json:"extras,omitempty"`
++}
++
++func NewClient(gotifyURL, gotifyToken string, gotifyPriority int) *Client {
++	return &Client{
++		gotifyURL:      strings.TrimRight(gotifyURL, "/"),
++		gotifyToken:    gotifyToken,
++		gotifyPriority: max(0, min(gotifyPriority, 10)),
++	}
++}
++
++func (c *Client) SendMessages(feed *model.Feed, entries model.Entries) error {
++	if c.gotifyURL == "" || c.gotifyToken == "" {
++		return errors.New("gotify: URL and application token are required")
++	}
++
++	for _, entry := range entries {
++		msg := &message{
++			Title:    feed.Title,
++			Message:  entry.Title,
++			Priority: c.gotifyPriority,
++			Extras: map[string]any{
++				// See https://gotify.net/docs/msgextras#clientnotification
++				"client::notification": map[string]any{
++					"click": map[string]string{"url": entry.URL},
++				},
++			},
++		}
++
++		slog.Debug("Sending Gotify message",
++			slog.String("url", c.gotifyURL),
++			slog.Int("priority", msg.Priority),
++			slog.String("message", msg.Message),
++			slog.String("entry_url", entry.URL),
++		)
++
++		if err := c.makeRequest(msg); err != nil {
++			return err
++		}
++	}
++
++	return nil
++}
++
++func (c *Client) makeRequest(payload *message) error {
++	requestBody, err := json.Marshal(payload)
++	if err != nil {
++		return fmt.Errorf("gotify: unable to encode request body: %w", err)
++	}
++
++	request, err := http.NewRequest(http.MethodPost, c.gotifyURL+"/message", bytes.NewReader(requestBody))
++	if err != nil {
++		return fmt.Errorf("gotify: unable to create request: %w", err)
++	}
++
++	request.Header.Set("Content-Type", "application/json")
++	request.Header.Set("User-Agent", "Miniflux/"+version.Version)
++	request.Header.Set("X-Gotify-Key", c.gotifyToken)
++
++	httpClient := client.NewClientWithOptions(client.Options{Timeout: defaultClientTimeout, BlockPrivateNetworks: !config.Opts.IntegrationAllowPrivateNetworks()})
++	response, err := httpClient.Do(request)
++	if err != nil {
++		return fmt.Errorf("gotify: unable to send request: %w", err)
++	}
++	defer response.Body.Close()
++
++	if response.StatusCode >= http.StatusBadRequest {
++		return fmt.Errorf("gotify: incorrect response status code %d for url %s", response.StatusCode, c.gotifyURL)
++	}
++
++	return nil
++}
+diff --git a/internal/integration/integration.go b/internal/integration/integration.go
+index 5606aab6..b9ec2837 100644
+--- a/internal/integration/integration.go
++++ b/internal/integration/integration.go
+@@ -13,6 +13,7 @@ import (
+ 	"miniflux.app/v2/internal/integration/discord"
+ 	"miniflux.app/v2/internal/integration/espial"
+ 	"miniflux.app/v2/internal/integration/instapaper"
++	"miniflux.app/v2/internal/integration/gotify"
+ 	"miniflux.app/v2/internal/integration/karakeep"
+ 	"miniflux.app/v2/internal/integration/linkace"
+ 	"miniflux.app/v2/internal/integration/linkding"
+@@ -642,6 +643,24 @@ func PushEntries(feed *model.Feed, entries model.Entries, userIntegrations *mode
+ 		}
+ 	}
+ 
++	if userIntegrations.GotifyEnabled && feed.GotifyEnabled {
++		slog.Debug("Sending new entries to Gotify",
++			slog.Int64("user_id", userIntegrations.UserID),
++			slog.Int("nb_entries", len(entries)),
++			slog.Int64("feed_id", feed.ID),
++		)
++
++		client := gotify.NewClient(
++			userIntegrations.GotifyURL,
++			userIntegrations.GotifyToken,
++			userIntegrations.GotifyPriority,
++		)
++
++		if err := client.SendMessages(feed, entries); err != nil {
++			slog.Warn("Unable to send new entries to Gotify", slog.Any("error", err))
++		}
++	}
++
+ 	if userIntegrations.PushoverEnabled && feed.PushoverEnabled {
+ 		slog.Debug("Sending new entries to Pushover",
+ 			slog.Int64("user_id", userIntegrations.UserID),
+diff --git a/internal/locale/translations/ar_SA.json b/internal/locale/translations/ar_SA.json
+index d779ebd8..09f578c1 100644
+--- a/internal/locale/translations/ar_SA.json
++++ b/internal/locale/translations/ar_SA.json
+@@ -199,6 +199,7 @@
+     "form.feed.label.feed_url": "رابط المصدر",
+     "form.feed.label.feed_username": "اسم مستخدم المصدر",
+     "form.feed.label.fetch_via_proxy": "استخدم الوكيل الذي تم تكوينه على مستوى التطبيق",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "إخفاء المقالات من القائمة العامة غير المقروءة",
+     "form.feed.label.ignore_http_cache": "تجاهل ذاكرة التخزين المؤقت لـ HTTP",
+     "form.feed.label.keep_filter_entry_rules": "قواعد السماح للمقالات",
+@@ -248,6 +249,10 @@
+     "form.integration.fever_endpoint": "نقطة نهاية Fever API:",
+     "form.integration.fever_password": "كلمة مرور Fever",
+     "form.integration.fever_username": "اسم مستخدم Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "تفعيل Google Reader API",
+     "form.integration.googlereader_endpoint": "نقطة نهاية Google Reader API:",
+     "form.integration.googlereader_password": "كلمة مرور Google Reader",
+diff --git a/internal/locale/translations/de_DE.json b/internal/locale/translations/de_DE.json
+index 46068777..bc3b10b9 100644
+--- a/internal/locale/translations/de_DE.json
++++ b/internal/locale/translations/de_DE.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "URL des Abonnements",
+     "form.feed.label.feed_username": "Benutzername des Abonnements",
+     "form.feed.label.fetch_via_proxy": "Den auf Anwendungsebene konfigurierten Proxy verwenden",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Artikel in der globalen Ungelesen-Liste ausblenden",
+     "form.feed.label.ignore_http_cache": "Ignoriere HTTP-Cache",
+     "form.feed.label.keep_filter_entry_rules": "Erlaubnisregeln",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Fever-API-Endpunkt:",
+     "form.integration.fever_password": "Fever-Passwort",
+     "form.integration.fever_username": "Fever-Benutzername",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Google-Reader-API aktivieren",
+     "form.integration.googlereader_endpoint": "Google-Reader-API-Endpunkt:",
+     "form.integration.googlereader_password": "Google-Reader-Passwort",
+diff --git a/internal/locale/translations/el_EL.json b/internal/locale/translations/el_EL.json
+index fee77a6a..cf72e448 100644
+--- a/internal/locale/translations/el_EL.json
++++ b/internal/locale/translations/el_EL.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "Διεύθυνση URL ροής",
+     "form.feed.label.feed_username": "Όνομα Χρήστη ροής",
+     "form.feed.label.fetch_via_proxy": "Χρησιμοποιήστε τον διακομιστή μεσολάβησης που έχει ρυθμιστεί σε επίπεδο εφαρμογής",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Απόκρυψη καταχωρήσεων σε γενική λίστα μη αναγνωσμένων",
+     "form.feed.label.ignore_http_cache": "Αγνοήστε την προσωρινή μνήμη HTTP",
+     "form.feed.label.keep_filter_entry_rules": "Κανόνες Επιτρεπόμενων Καταχωρήσεων",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Τελικό σημείο Fever API:",
+     "form.integration.fever_password": "Κωδικός Πρόσβασης Fever",
+     "form.integration.fever_username": "Όνομα Χρήστη Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Ενεργοποιήστε το Google Reader API",
+     "form.integration.googlereader_endpoint": "Τελικό σημείο Google Reader API:",
+     "form.integration.googlereader_password": "Κωδικός Πρόσβασης Google Reader",
+diff --git a/internal/locale/translations/en_US.json b/internal/locale/translations/en_US.json
+index f423e952..b1808423 100644
+--- a/internal/locale/translations/en_US.json
++++ b/internal/locale/translations/en_US.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "Feed URL",
+     "form.feed.label.feed_username": "Feed Username",
+     "form.feed.label.fetch_via_proxy": "Use the proxy configured at the application level",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Hide entries in global unread list",
+     "form.feed.label.ignore_http_cache": "Ignore HTTP cache",
+     "form.feed.label.keep_filter_entry_rules": "Entry Allow Rules",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Fever API endpoint:",
+     "form.integration.fever_password": "Fever Password",
+     "form.integration.fever_username": "Fever Username",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Activate Google Reader API",
+     "form.integration.googlereader_endpoint": "Google Reader API endpoint:",
+     "form.integration.googlereader_password": "Google Reader Password",
+diff --git a/internal/locale/translations/es_ES.json b/internal/locale/translations/es_ES.json
+index 9eb1d928..ea6eb0f7 100644
+--- a/internal/locale/translations/es_ES.json
++++ b/internal/locale/translations/es_ES.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "URL de la fuente",
+     "form.feed.label.feed_username": "Nombre de usuario de la fuente",
+     "form.feed.label.fetch_via_proxy": "Usar el proxy configurado a nivel de la aplicación",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Ocultar artículos en la lista global de no leídos",
+     "form.feed.label.ignore_http_cache": "Ignorar caché HTTP",
+     "form.feed.label.keep_filter_entry_rules": "Reglas de Permitir Entradas",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Acceso API de Fever:",
+     "form.integration.fever_password": "Contraseña de Fever",
+     "form.integration.fever_username": "Nombre de usuario de Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Activar API de Google Reader",
+     "form.integration.googlereader_endpoint": "Acceso API de Google Reader:",
+     "form.integration.googlereader_password": "Contraseña de Google Reader",
+diff --git a/internal/locale/translations/fi_FI.json b/internal/locale/translations/fi_FI.json
+index 20e240b7..04201818 100644
+--- a/internal/locale/translations/fi_FI.json
++++ b/internal/locale/translations/fi_FI.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "Syötteen URL-osoite",
+     "form.feed.label.feed_username": "Syötteen käyttäjätunnus",
+     "form.feed.label.fetch_via_proxy": "Käytä sovellustasolla määritettyä välityspalvelinta",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Piilota artikkelit lukemattomien listassa",
+     "form.feed.label.ignore_http_cache": "Ohita HTTP-välimuisti",
+     "form.feed.label.keep_filter_entry_rules": "Merkinnän sallimissäännöt",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Fever API -päätepiste:",
+     "form.integration.fever_password": "Fever-salasana",
+     "form.integration.fever_username": "Fever-käyttäjätunnus",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Aktivoi Google Reader API",
+     "form.integration.googlereader_endpoint": "Google Reader API -päätepiste:",
+     "form.integration.googlereader_password": "Google-lukijan salasana",
+diff --git a/internal/locale/translations/fr_FR.json b/internal/locale/translations/fr_FR.json
+index 6f02344e..faf986b2 100644
+--- a/internal/locale/translations/fr_FR.json
++++ b/internal/locale/translations/fr_FR.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "URL du flux",
+     "form.feed.label.feed_username": "Nom d'utilisateur du flux",
+     "form.feed.label.fetch_via_proxy": "Utiliser le proxy configuré au niveau de l'application",
++    "form.feed.label.gotify_activate": "Envoyer les entrées vers Gotify",
+     "form.feed.label.hide_globally": "Masquer les entrées dans la liste globale non lue",
+     "form.feed.label.ignore_http_cache": "Ignorer le cache HTTP",
+     "form.feed.label.keep_filter_entry_rules": "Règles d'autorisation des entrées",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Point de terminaison de l'API Fever :",
+     "form.integration.fever_password": "Mot de passe pour l'API de Fever",
+     "form.integration.fever_username": "Nom d'utilisateur pour l'API de Fever",
++    "form.integration.gotify_activate": "Envoyer les entrées vers Gotify",
++    "form.integration.gotify_priority": "Priorité Gotify (0-10)",
++    "form.integration.gotify_token": "Jeton d'application Gotify",
++    "form.integration.gotify_url": "URL du serveur Gotify",
+     "form.integration.googlereader_activate": "Activer l'API de Google Reader",
+     "form.integration.googlereader_endpoint": "Point de terminaison de l'API Google Reader :",
+     "form.integration.googlereader_password": "Mot de passe pour l'API de Google Reader",
+diff --git a/internal/locale/translations/gl_ES.json b/internal/locale/translations/gl_ES.json
+index f1b8050f..929a87ec 100644
+--- a/internal/locale/translations/gl_ES.json
++++ b/internal/locale/translations/gl_ES.json
+@@ -186,6 +186,7 @@
+     "form.feed.label.feed_url": "URL da canle",
+     "form.feed.label.feed_username": "Identificador para a canle",
+     "form.feed.label.fetch_via_proxy": "Usar o mandatario configurado a nivel da aplicación",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Ocultar entradas na lista global de non lidos",
+     "form.feed.label.ignore_entry_updates": "Ignorar actualizacións da entrada",
+     "form.feed.label.ignore_http_cache": "Ignorar memoria tobo HTTP",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Punto de acceso da Fever API:",
+     "form.integration.fever_password": "Contrasinal Fever",
+     "form.integration.fever_username": "Identificador Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Activar API Google Reader",
+     "form.integration.googlereader_endpoint": "Punto de acceso de Google Reader API:",
+     "form.integration.googlereader_password": "Contrasinal Google Reader",
+diff --git a/internal/locale/translations/hi_IN.json b/internal/locale/translations/hi_IN.json
+index 1bb01b97..f50e2c59 100644
+--- a/internal/locale/translations/hi_IN.json
++++ b/internal/locale/translations/hi_IN.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "फ़ीड यूआरएल",
+     "form.feed.label.feed_username": "फ़ीड उपयोगकर्ता नाम",
+     "form.feed.label.fetch_via_proxy": "एप्लिकेशन स्तर पर कॉन्फ़िगर किए गए प्रॉक्सी का उपयोग करें",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "वैश्विक अपठित सूची में प्रविष्टियां छिपाएं",
+     "form.feed.label.ignore_http_cache": "एचटीटीपी कैश पर ध्यान न दें",
+     "form.feed.label.keep_filter_entry_rules": "प्रविष्टि अनुमति नियम",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "फीवर एपीआई समापन बिंदु:",
+     "form.integration.fever_password": "फीवर पासवर्ड",
+     "form.integration.fever_username": "फीवर उपयोगकर्ता नाम",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "गूगल रीडर एपीआई सक्रिय करें",
+     "form.integration.googlereader_endpoint": "गूगल रीडर एपीआई समापन बिंदु:",
+     "form.integration.googlereader_password": "गूगल रीडर पासवर्ड",
+diff --git a/internal/locale/translations/id_ID.json b/internal/locale/translations/id_ID.json
+index e27cd0d7..beefdace 100644
+--- a/internal/locale/translations/id_ID.json
++++ b/internal/locale/translations/id_ID.json
+@@ -184,6 +184,7 @@
+     "form.feed.label.feed_url": "URL Umpan",
+     "form.feed.label.feed_username": "Nama Pengguna Umpan",
+     "form.feed.label.fetch_via_proxy": "Gunakan proksi yang dikonfigurasi di tingkat aplikasi",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Sembunyikan entri di daftar belum dibaca global",
+     "form.feed.label.ignore_http_cache": "Abaikan Tembolok HTTP",
+     "form.feed.label.keep_filter_entry_rules": "Aturan Izin Entri",
+@@ -233,6 +234,10 @@
+     "form.integration.fever_endpoint": "Titik URL API Fever:",
+     "form.integration.fever_password": "Kata Sandi Fever",
+     "form.integration.fever_username": "Nama Pengguna Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Aktifkan API Google Reader",
+     "form.integration.googlereader_endpoint": "Titik URL API Google Reader:",
+     "form.integration.googlereader_password": "Kata Sandi Google Reader",
+diff --git a/internal/locale/translations/it_IT.json b/internal/locale/translations/it_IT.json
+index 1f6a03fb..fb1535e1 100644
+--- a/internal/locale/translations/it_IT.json
++++ b/internal/locale/translations/it_IT.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "URL del feed",
+     "form.feed.label.feed_username": "Nome utente del feed",
+     "form.feed.label.fetch_via_proxy": "Usa il proxy configurato a livello di applicazione",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Nascondere le voci nella lista globale dei non letti",
+     "form.feed.label.ignore_http_cache": "Ignora cache HTTP",
+     "form.feed.label.keep_filter_entry_rules": "Regole di Permesso delle Voci",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Endpoint dell'API di Fever:",
+     "form.integration.fever_password": "Password dell'account Fever",
+     "form.integration.fever_username": "Nome utente dell'account Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Abilita l'API di Google Reader",
+     "form.integration.googlereader_endpoint": "Endpoint dell'API di Google Reader:",
+     "form.integration.googlereader_password": "Password dell'account Google Reader",
+diff --git a/internal/locale/translations/ja_JP.json b/internal/locale/translations/ja_JP.json
+index c31249e8..8cbf92f8 100644
+--- a/internal/locale/translations/ja_JP.json
++++ b/internal/locale/translations/ja_JP.json
+@@ -184,6 +184,7 @@
+     "form.feed.label.feed_url": "フィード URL",
+     "form.feed.label.feed_username": "フィードのユーザー名",
+     "form.feed.label.fetch_via_proxy": "アプリケーションレベルで設定されたプロキシを使用する",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "未読一覧に記事を表示しない",
+     "form.feed.label.ignore_http_cache": "HTTPキャッシュを無視",
+     "form.feed.label.keep_filter_entry_rules": "エントリ許可ルール",
+@@ -233,6 +234,10 @@
+     "form.integration.fever_endpoint": "Fever APIエンドポイント:",
+     "form.integration.fever_password": "Fever のパスワード",
+     "form.integration.fever_username": "Fever のユーザー名",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Google Reader API を有効にする",
+     "form.integration.googlereader_endpoint": "Google Reader APIエンドポイント:",
+     "form.integration.googlereader_password": "Google Reader のパスワード",
+diff --git a/internal/locale/translations/ko_KR.json b/internal/locale/translations/ko_KR.json
+index 285904ec..4699058b 100644
+--- a/internal/locale/translations/ko_KR.json
++++ b/internal/locale/translations/ko_KR.json
+@@ -184,6 +184,7 @@
+     "form.feed.label.feed_url": "피드 URL",
+     "form.feed.label.feed_username": "피드 사용자명",
+     "form.feed.label.fetch_via_proxy": "애플리케이션 수준에서 설정된 프록시 사용",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "읽지 않음 목록에 게시물을 표시하지 않음",
+     "form.feed.label.ignore_http_cache": "HTTP 캐시 무시",
+     "form.feed.label.keep_filter_entry_rules": "게시물 허용 규칙",
+@@ -233,6 +234,10 @@
+     "form.integration.fever_endpoint": "Fever API 엔드포인트:",
+     "form.integration.fever_password": "Fever 비밀번호",
+     "form.integration.fever_username": "Fever 사용자명",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Google Reader API 활성화",
+     "form.integration.googlereader_endpoint": "Google Reader API 엔드포인트:",
+     "form.integration.googlereader_password": "Google Reader 비밀번호",
+diff --git a/internal/locale/translations/nan_Latn_pehoeji.json b/internal/locale/translations/nan_Latn_pehoeji.json
+index 75ca826e..37a16680 100644
+--- a/internal/locale/translations/nan_Latn_pehoeji.json
++++ b/internal/locale/translations/nan_Latn_pehoeji.json
+@@ -184,6 +184,7 @@
+     "form.feed.label.feed_url": "Siau-sit lâi-goân bāng-chí",
+     "form.feed.label.feed_username": "Siau-sit lâi-goân kháu-chō miâ",
+     "form.feed.label.fetch_via_proxy": "Iōng tī su-hāu-khì siat-tēng ê proxy",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Tī choân-he̍k ah-bōe tha̍k--ê lia̍t-pió am-khàm siau-sit",
+     "form.feed.label.ignore_http_cache": "Pàng-ba̍k HTTP cache",
+     "form.feed.label.keep_filter_entry_rules": "Bêng ê siau-sit hō͘-chiâⁿ kui-chek",
+@@ -233,6 +234,10 @@
+     "form.integration.fever_endpoint": "Fever API thâu",
+     "form.integration.fever_password": "Fever bi̍t-bé",
+     "form.integration.fever_username": "Fever kháu-chō miâ",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Khai-sí iōng Google Reader API",
+     "form.integration.googlereader_endpoint": "Google Reader API thâu：",
+     "form.integration.googlereader_password": "Google Reader bi̍t-bé",
+diff --git a/internal/locale/translations/nl_NL.json b/internal/locale/translations/nl_NL.json
+index c7ba53af..f0bd50fe 100644
+--- a/internal/locale/translations/nl_NL.json
++++ b/internal/locale/translations/nl_NL.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "Feed-URL",
+     "form.feed.label.feed_username": "Feed gebruikersnaam",
+     "form.feed.label.fetch_via_proxy": "Gebruik de proxy die op applicatieniveau is geconfigureerd",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Verberg artikelen in de globale ongelezen lijst",
+     "form.feed.label.ignore_http_cache": "Negeer HTTP-cache",
+     "form.feed.label.keep_filter_entry_rules": "Toestaan Regels voor Items",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Fever URL:",
+     "form.integration.fever_password": "Fever wachtwoord",
+     "form.integration.fever_username": "Fever gebruikersnaam",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Activeer Google Reader API",
+     "form.integration.googlereader_endpoint": "Google Reader API-endpoint:",
+     "form.integration.googlereader_password": "Google Reader wachtwoord",
+diff --git a/internal/locale/translations/pl_PL.json b/internal/locale/translations/pl_PL.json
+index e40e9ce5..54605a5d 100644
+--- a/internal/locale/translations/pl_PL.json
++++ b/internal/locale/translations/pl_PL.json
+@@ -190,6 +190,7 @@
+     "form.feed.label.feed_url": "Adres URL kanału",
+     "form.feed.label.feed_username": "Nazwa użytkownika subskrypcji",
+     "form.feed.label.fetch_via_proxy": "Użyj serwera proxy skonfigurowanego na poziomie aplikacji",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Ukryj wpisy na globalnej liście nieprzeczytanych",
+     "form.feed.label.ignore_http_cache": "Zignoruj pamięć podręczną HTTP",
+     "form.feed.label.keep_filter_entry_rules": "Reguły zachowywania wpisów",
+@@ -239,6 +240,10 @@
+     "form.integration.fever_endpoint": "Punkt końcowy API Fever:",
+     "form.integration.fever_password": "Hasło do Fever",
+     "form.integration.fever_username": "Login do Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Aktywuj API Google Reader",
+     "form.integration.googlereader_endpoint": "Punkt końcowy API Google Reader:",
+     "form.integration.googlereader_password": "Hasło do Google Reader",
+diff --git a/internal/locale/translations/pt_BR.json b/internal/locale/translations/pt_BR.json
+index f7bd3333..29a19134 100644
+--- a/internal/locale/translations/pt_BR.json
++++ b/internal/locale/translations/pt_BR.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "URL da fonte",
+     "form.feed.label.feed_username": "Nome de usuário da fonte",
+     "form.feed.label.fetch_via_proxy": "Usar o proxy configurado no nível da aplicação",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Ocultar entradas na lista global não lida",
+     "form.feed.label.ignore_http_cache": "Ignorar cache HTTP",
+     "form.feed.label.keep_filter_entry_rules": "Regras de Permissão de Entradas",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Endpoint da API do Fever:",
+     "form.integration.fever_password": "Senha do Fever",
+     "form.integration.fever_username": "Nome de usuário do Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Ativar API do Google Reader",
+     "form.integration.googlereader_endpoint": "Endpoint da API do Google Reader:",
+     "form.integration.googlereader_password": "Senha do Google Reader",
+diff --git a/internal/locale/translations/ro_RO.json b/internal/locale/translations/ro_RO.json
+index 17f5998d..240e3f43 100644
+--- a/internal/locale/translations/ro_RO.json
++++ b/internal/locale/translations/ro_RO.json
+@@ -190,6 +190,7 @@
+     "form.feed.label.feed_url": "Flux URL",
+     "form.feed.label.feed_username": "Nume user Flux",
+     "form.feed.label.fetch_via_proxy": "Utilizați proxy-ul configurat la nivelul aplicației",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Ascunde intrările în lista globală de articole necitite",
+     "form.feed.label.ignore_http_cache": "Ignoră cache HTTP",
+     "form.feed.label.keep_filter_entry_rules": "Reguli de Permitere a Intrărilor",
+@@ -239,6 +240,10 @@
+     "form.integration.fever_endpoint": "Punct access API Fever:",
+     "form.integration.fever_password": "Parolă Fever",
+     "form.integration.fever_username": "Utilizator Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Activează API Google Reader",
+     "form.integration.googlereader_endpoint": "Punct acces API Google Reader:",
+     "form.integration.googlereader_password": "Parolă Google Reader",
+diff --git a/internal/locale/translations/ru_RU.json b/internal/locale/translations/ru_RU.json
+index 535501fd..4b59b86c 100644
+--- a/internal/locale/translations/ru_RU.json
++++ b/internal/locale/translations/ru_RU.json
+@@ -190,6 +190,7 @@
+     "form.feed.label.feed_url": "Адрес подписки",
+     "form.feed.label.feed_username": "Имя пользователя подписки",
+     "form.feed.label.fetch_via_proxy": "Использовать прокси, настроенный на уровне приложения",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Скрыть записи в глобальном списке непрочитанных",
+     "form.feed.label.ignore_http_cache": "Игнорировать HTTP кеш",
+     "form.feed.label.keep_filter_entry_rules": "Правила разрешения записей",
+@@ -239,6 +240,10 @@
+     "form.integration.fever_endpoint": "Конечная точка Fever API:",
+     "form.integration.fever_password": "Пароль Fever",
+     "form.integration.fever_username": "Имя пользователя Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Активировать Google Reader API",
+     "form.integration.googlereader_endpoint": "Конечная точка Google Reader API:",
+     "form.integration.googlereader_password": "Пароль Google Reader",
+diff --git a/internal/locale/translations/tr_TR.json b/internal/locale/translations/tr_TR.json
+index 9d55d911..11bb84f4 100644
+--- a/internal/locale/translations/tr_TR.json
++++ b/internal/locale/translations/tr_TR.json
+@@ -187,6 +187,7 @@
+     "form.feed.label.feed_url": "Besleme URL'si",
+     "form.feed.label.feed_username": "Besleme Kullanıcı Adı",
+     "form.feed.label.fetch_via_proxy": "Uygulama düzeyinde yapılandırılmış proxy'yi kullan",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Genel okunmamış listesindeki girişleri gizle",
+     "form.feed.label.ignore_http_cache": "HTTP önbelleğini yoksay",
+     "form.feed.label.keep_filter_entry_rules": "Giriş İzin Kuralları",
+@@ -236,6 +237,10 @@
+     "form.integration.fever_endpoint": "Fever API uç noktası:",
+     "form.integration.fever_password": "Fever Parolası",
+     "form.integration.fever_username": "Fever Kullanıcı Adı",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Google Reader API'yi Etkinleştir",
+     "form.integration.googlereader_endpoint": "Google Reader API uç noktası:",
+     "form.integration.googlereader_password": "Google Reader Parolası",
+diff --git a/internal/locale/translations/uk_UA.json b/internal/locale/translations/uk_UA.json
+index 491a3edd..c78bd229 100644
+--- a/internal/locale/translations/uk_UA.json
++++ b/internal/locale/translations/uk_UA.json
+@@ -190,6 +190,7 @@
+     "form.feed.label.feed_url": "URL-адреса стрічки",
+     "form.feed.label.feed_username": "Ім’я користувача для завантаження",
+     "form.feed.label.fetch_via_proxy": "Використовувати проксі, налаштований на рівні програми",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "Приховати записи в глобальному списку непрочитаного",
+     "form.feed.label.ignore_http_cache": "Ігнорувати кеш HTTP",
+     "form.feed.label.keep_filter_entry_rules": "Правила дозволу записів",
+@@ -239,6 +240,10 @@
+     "form.integration.fever_endpoint": "Адреса доступу API Fever:",
+     "form.integration.fever_password": "Пароль Fever",
+     "form.integration.fever_username": "Ім’я користувача Fever",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "Увімкнути API Google Reader",
+     "form.integration.googlereader_endpoint": "Адреса доступу API Google Reader:",
+     "form.integration.googlereader_password": "Пароль Google Reader",
+diff --git a/internal/locale/translations/zh_CN.json b/internal/locale/translations/zh_CN.json
+index a67ec73c..def7f4a6 100644
+--- a/internal/locale/translations/zh_CN.json
++++ b/internal/locale/translations/zh_CN.json
+@@ -184,6 +184,7 @@
+     "form.feed.label.feed_url": "订阅源 URL",
+     "form.feed.label.feed_username": "订阅源用户名",
+     "form.feed.label.fetch_via_proxy": "使用在应用程序级别配置的代理",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "在全局未读列表中隐藏条目",
+     "form.feed.label.ignore_http_cache": "忽略 HTTP 缓存",
+     "form.feed.label.keep_filter_entry_rules": "条目允许规则",
+@@ -233,6 +234,10 @@
+     "form.integration.fever_endpoint": "Fever API 端点",
+     "form.integration.fever_password": "Fever 密码",
+     "form.integration.fever_username": "Fever 用户名",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "启用 Google Reader API",
+     "form.integration.googlereader_endpoint": "Google Reader API 端点：",
+     "form.integration.googlereader_password": "Google Reader 密码",
+diff --git a/internal/locale/translations/zh_TW.json b/internal/locale/translations/zh_TW.json
+index 507ce2f2..319da27f 100644
+--- a/internal/locale/translations/zh_TW.json
++++ b/internal/locale/translations/zh_TW.json
+@@ -184,6 +184,7 @@
+     "form.feed.label.feed_url": "Feed 網址",
+     "form.feed.label.feed_username": "Feed 使用者名稱",
+     "form.feed.label.fetch_via_proxy": "使用應用程式層級設定的代理",
++    "form.feed.label.gotify_activate": "Push entries to Gotify",
+     "form.feed.label.hide_globally": "在全域未讀清單中隱藏文章",
+     "form.feed.label.ignore_http_cache": "忽略 HTTP 快取",
+     "form.feed.label.keep_filter_entry_rules": "條目允許規則",
+@@ -233,6 +234,10 @@
+     "form.integration.fever_endpoint": "Fever API 端點",
+     "form.integration.fever_password": "Fever 密碼",
+     "form.integration.fever_username": "Fever 使用者名稱",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.googlereader_activate": "啟用 Google Reader API",
+     "form.integration.googlereader_endpoint": "Google Reader API 端點：",
+     "form.integration.googlereader_password": "Google Reader 密碼",
+diff --git a/internal/model/feed.go b/internal/model/feed.go
+index eb74b0f1..456bbdcc 100644
+--- a/internal/model/feed.go
++++ b/internal/model/feed.go
+@@ -54,6 +54,7 @@ type Feed struct {
+ 	HideGlobally                bool      `json:"hide_globally"`
+ 	DisableHTTP2                bool      `json:"disable_http2"`
+ 	PushoverEnabled             bool      `json:"pushover_enabled"`
++	GotifyEnabled               bool      `json:"gotify_enabled"`
+ 	NtfyEnabled                 bool      `json:"ntfy_enabled"`
+ 	Crawler                     bool      `json:"crawler"`
+ 	IgnoreEntryUpdates          bool      `json:"ignore_entry_updates"`
+diff --git a/internal/model/integration.go b/internal/model/integration.go
+index b523bc93..f3fe4f85 100644
+--- a/internal/model/integration.go
++++ b/internal/model/integration.go
+@@ -127,4 +127,8 @@ type Integration struct {
+ 	PushoverDevice                   string
+ 	PushoverPrefix                   string
+ 	ArchiveorgEnabled                bool
++	GotifyEnabled                    bool
++	GotifyURL                        string
++	GotifyToken                      string
++	GotifyPriority                   int
+ }
+diff --git a/internal/storage/feed.go b/internal/storage/feed.go
+index 657d3b99..1d0fdf5e 100644
+--- a/internal/storage/feed.go
++++ b/internal/storage/feed.go
+@@ -381,9 +381,10 @@ func (s *Storage) UpdateFeed(feed *model.Feed) (err error) {
+ 			pushover_priority=$37,
+ 			proxy_url=$38,
+ 			ignore_entry_updates=$39,
+-			language=$40
++			language=$40,
++			gotify_enabled=$41
+ 		WHERE
+-			id=$41 AND user_id=$42
++			id=$42 AND user_id=$43
+ 	`
+ 	_, err = s.db.Exec(query,
+ 		feed.FeedURL,
+@@ -426,6 +427,7 @@ func (s *Storage) UpdateFeed(feed *model.Feed) (err error) {
+ 		feed.ProxyURL,
+ 		feed.IgnoreEntryUpdates,
+ 		feed.Language,
++		feed.GotifyEnabled,
+ 		feed.ID,
+ 		feed.UserID,
+ 	)
+diff --git a/internal/storage/feed_query_builder.go b/internal/storage/feed_query_builder.go
+index 564bbdee..4bcbb68c 100644
+--- a/internal/storage/feed_query_builder.go
++++ b/internal/storage/feed_query_builder.go
+@@ -185,7 +185,8 @@ func (f *feedQueryBuilder) GetFeeds() (model.Feeds, error) {
+ 			f.pushover_enabled,
+ 			f.pushover_priority,
+ 			f.proxy_url,
+-			f.ignore_entry_updates
++			f.ignore_entry_updates,
++			f.gotify_enabled
+ 		FROM
+ 			feeds f
+ 		LEFT JOIN
+@@ -269,6 +270,7 @@ func (f *feedQueryBuilder) GetFeeds() (model.Feeds, error) {
+ 			&feed.PushoverPriority,
+ 			&feed.ProxyURL,
+ 			&feed.IgnoreEntryUpdates,
++			&feed.GotifyEnabled,
+ 		)
+ 		if err != nil {
+ 			return nil, fmt.Errorf(`store: unable to fetch feeds row: %w`, err)
+diff --git a/internal/storage/integration.go b/internal/storage/integration.go
+index a68e3d33..133d9885 100644
+--- a/internal/storage/integration.go
++++ b/internal/storage/integration.go
+@@ -231,7 +231,11 @@ func (s *Storage) Integration(userID int64) (*model.Integration, error) {
+ 			linktaco_org_slug,
+ 			linktaco_tags,
+ 			linktaco_visibility,
+-			archiveorg_enabled
++			archiveorg_enabled,
++			gotify_enabled,
++			gotify_url,
++			gotify_token,
++			gotify_priority
+ 		FROM
+ 			integrations
+ 		WHERE
+@@ -361,6 +365,10 @@ func (s *Storage) Integration(userID int64) (*model.Integration, error) {
+ 		&integration.LinktacoTags,
+ 		&integration.LinktacoVisibility,
+ 		&integration.ArchiveorgEnabled,
++		&integration.GotifyEnabled,
++		&integration.GotifyURL,
++		&integration.GotifyToken,
++		&integration.GotifyPriority,
+ 	)
+ 	switch {
+ 	case errors.Is(err, sql.ErrNoRows):
+@@ -498,9 +506,13 @@ func (s *Storage) UpdateIntegration(integration *model.Integration) error {
+ 			linktaco_visibility=$118,
+ 			archiveorg_enabled=$119,
+ 			linkwarden_collection_id=$120,
+-			readeck_push_enabled=$121
++			readeck_push_enabled=$121,
++			gotify_enabled=$122,
++			gotify_url=$123,
++			gotify_token=$124,
++			gotify_priority=$125
+ 		WHERE
+-			user_id=$122
++			user_id=$126
+ 	`
+ 	_, err := s.db.Exec(
+ 		query,
+@@ -625,6 +637,10 @@ func (s *Storage) UpdateIntegration(integration *model.Integration) error {
+ 		integration.ArchiveorgEnabled,
+ 		integration.LinkwardenCollectionID,
+ 		integration.ReadeckPushEnabled,
++		integration.GotifyEnabled,
++		integration.GotifyURL,
++		integration.GotifyToken,
++		integration.GotifyPriority,
+ 		integration.UserID,
+ 	)
+ 
+diff --git a/internal/template/templates/views/edit_feed.html b/internal/template/templates/views/edit_feed.html
+index afef7f55..8c5fd706 100644
+--- a/internal/template/templates/views/edit_feed.html
++++ b/internal/template/templates/views/edit_feed.html
+@@ -242,6 +242,11 @@
+                 </select>
+             </details>
+ 
++            <details {{ if .form.GotifyEnabled }}open{{ end }}>
++                <summary>Gotify</summary>
++                <label><input type="checkbox" name="gotify_enabled" value="1" {{ if .form.GotifyEnabled }}checked{{ end }}> {{ t "form.feed.label.gotify_activate" }}</label>
++            </details>
++
+             <details {{ if .form.PushoverEnabled }}open{{ end }}>
+                 <summary>Pushover</summary>
+                 <label><input type="checkbox" name="pushover_enabled" value="1" {{ if .form.PushoverEnabled }}checked{{ end }}> {{ t "form.feed.label.pushover_activate" }}</label>
+diff --git a/internal/template/templates/views/integrations.html b/internal/template/templates/views/integrations.html
+index ca51f5f7..f63da74e 100644
+--- a/internal/template/templates/views/integrations.html
++++ b/internal/template/templates/views/integrations.html
+@@ -455,6 +455,28 @@
+         </div>
+     </details>
+ 
++    <details {{ if .form.GotifyEnabled }}open{{ end }}>
++        <summary>Gotify</summary>
++        <div class="form-section">
++            <label>
++                <input type="checkbox" name="gotify_enabled" value="1" {{ if .form.GotifyEnabled }}checked{{ end }}> {{ t "form.integration.gotify_activate" }}
++            </label>
++
++            <label for="form-gotify-url">{{ t "form.integration.gotify_url" }}</label>
++            <input type="url" name="gotify_url" id="form-gotify-url" value="{{ .form.GotifyURL }}" placeholder="https://gotify.example.org" spellcheck="false">
++
++            <label for="form-gotify-token">{{ t "form.integration.gotify_token" }}</label>
++            <input type="password" name="gotify_token" id="form-gotify-token" value="{{ .form.GotifyToken }}" spellcheck="false">
++
++            <label for="form-gotify-priority">{{ t "form.integration.gotify_priority" }}</label>
++            <input type="number" name="gotify_priority" id="form-gotify-priority" value="{{ .form.GotifyPriority }}" min="0" max="10">
++
++            <div class="buttons">
++                <button type="submit" class="button button-primary" data-label-loading="{{ t "form.submit.saving" }}">{{ t "action.update" }}</button>
++            </div>
++        </div>
++    </details>
++
+     <details {{ if .form.PushoverEnabled }}open{{ end }}>
+         <summary>Pushover</summary>
+         <div class="form-section">
+diff --git a/internal/ui/feed_edit.go b/internal/ui/feed_edit.go
+index 5ce6ccb4..fe4b360a 100644
+--- a/internal/ui/feed_edit.go
++++ b/internal/ui/feed_edit.go
+@@ -71,6 +71,7 @@ func (h *handler) showEditFeedPage(w http.ResponseWriter, r *http.Request) {
+ 		NtfyPriority:                feed.NtfyPriority,
+ 		NtfyTopic:                   feed.NtfyTopic,
+ 		PushoverEnabled:             feed.PushoverEnabled,
++		GotifyEnabled:               feed.GotifyEnabled,
+ 		PushoverPriority:            feed.PushoverPriority,
+ 		ProxyURL:                    feed.ProxyURL,
+ 	}
+diff --git a/internal/ui/form/feed.go b/internal/ui/form/feed.go
+index e42d6c73..c0147904 100644
+--- a/internal/ui/form/feed.go
++++ b/internal/ui/form/feed.go
+@@ -47,6 +47,7 @@ type FeedForm struct {
+ 
+ 	DisableHTTP2     bool
+ 	PushoverEnabled  bool
++	GotifyEnabled    bool
+ 	PushoverPriority int
+ 	ProxyURL         string
+ }
+@@ -86,6 +87,7 @@ func (f FeedForm) Merge(feed *model.Feed) *model.Feed {
+ 	feed.NtfyPriority = f.NtfyPriority
+ 	feed.NtfyTopic = f.NtfyTopic
+ 	feed.PushoverEnabled = f.PushoverEnabled
++	feed.GotifyEnabled = f.GotifyEnabled
+ 	feed.PushoverPriority = f.PushoverPriority
+ 	feed.ProxyURL = f.ProxyURL
+ 	return feed
+@@ -140,6 +142,7 @@ func NewFeedForm(r *http.Request) *FeedForm {
+ 		NtfyPriority:                ntfyPriority,
+ 		NtfyTopic:                   r.FormValue("ntfy_topic"),
+ 		PushoverEnabled:             r.FormValue("pushover_enabled") == "1",
++		GotifyEnabled:               r.FormValue("gotify_enabled") == "1",
+ 		PushoverPriority:            pushoverPriority,
+ 		ProxyURL:                    r.FormValue("proxy_url"),
+ 	}
+diff --git a/internal/ui/form/integration.go b/internal/ui/form/integration.go
+index a41c26dd..c4864eca 100644
+--- a/internal/ui/form/integration.go
++++ b/internal/ui/form/integration.go
+@@ -134,6 +134,10 @@ type IntegrationForm struct {
+ 	PushoverDevice                   string
+ 	PushoverPrefix                   string
+ 	ArchiveorgEnabled                bool
++	GotifyEnabled                    bool
++	GotifyURL                        string
++	GotifyToken                      string
++	GotifyPriority                   int
+ }
+ 
+ // Merge copy form values to the model.
+@@ -256,6 +260,10 @@ func (i IntegrationForm) Merge(integration *model.Integration) {
+ 	integration.PushoverDevice = i.PushoverDevice
+ 	integration.PushoverPrefix = i.PushoverPrefix
+ 	integration.ArchiveorgEnabled = i.ArchiveorgEnabled
++	integration.GotifyEnabled = i.GotifyEnabled
++	integration.GotifyURL = i.GotifyURL
++	integration.GotifyToken = i.GotifyToken
++	integration.GotifyPriority = i.GotifyPriority
+ }
+ 
+ // ValidateGoogleReader ensures the Google Reader integration is not enabled without credentials.
+@@ -271,6 +279,11 @@ func (i IntegrationForm) ValidateGoogleReader(storedPasswordHash string) *locale
+ 
+ // NewIntegrationForm returns a new IntegrationForm.
+ func NewIntegrationForm(r *http.Request) *IntegrationForm {
++	gotifyPriority, err := strconv.Atoi(r.FormValue("gotify_priority"))
++	if err != nil {
++		gotifyPriority = 5
++	}
++
+ 	return &IntegrationForm{
+ 		PinboardEnabled:                  r.FormValue("pinboard_enabled") == "1",
+ 		PinboardToken:                    r.FormValue("pinboard_token"),
+@@ -392,6 +405,10 @@ func NewIntegrationForm(r *http.Request) *IntegrationForm {
+ 		PushoverDevice:                   r.FormValue("pushover_device"),
+ 		PushoverPrefix:                   r.FormValue("pushover_prefix"),
+ 		ArchiveorgEnabled:                r.FormValue("archiveorg_enabled") == "1",
++		GotifyEnabled:                    r.FormValue("gotify_enabled") == "1",
++		GotifyURL:                        r.FormValue("gotify_url"),
++		GotifyToken:                      r.FormValue("gotify_token"),
++		GotifyPriority:                   gotifyPriority,
+ 	}
+ }
+ 
+diff --git a/internal/ui/integration_show.go b/internal/ui/integration_show.go
+index f271367d..34779ae4 100644
+--- a/internal/ui/integration_show.go
++++ b/internal/ui/integration_show.go
+@@ -145,6 +145,10 @@ func (h *handler) showIntegrationPage(w http.ResponseWriter, r *http.Request) {
+ 		PushoverDevice:                   integration.PushoverDevice,
+ 		PushoverPrefix:                   integration.PushoverPrefix,
+ 		ArchiveorgEnabled:                integration.ArchiveorgEnabled,
++		GotifyEnabled:                    integration.GotifyEnabled,
++		GotifyURL:                        integration.GotifyURL,
++		GotifyToken:                      integration.GotifyToken,
++		GotifyPriority:                   integration.GotifyPriority,
+ 	}
+ 
+ 	view := view.New(h.tpl, r)

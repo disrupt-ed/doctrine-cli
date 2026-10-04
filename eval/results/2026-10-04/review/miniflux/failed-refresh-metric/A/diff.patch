@@ -1,0 +1,39 @@
+diff --git a/internal/metric/metric.go b/internal/metric/metric.go
+index 4188ee8f..2ee9d538 100644
+--- a/internal/metric/metric.go
++++ b/internal/metric/metric.go
+@@ -31,6 +31,14 @@ var (
+ 		[]string{"status"},
+ 	)
+ 
++	BackgroundFeedRefreshFailures = prometheus.NewCounter(
++		prometheus.CounterOpts{
++			Namespace: "miniflux",
++			Name:      "background_feed_refresh_failures_total",
++			Help:      "Total number of failed feed refreshes from the background workers",
++		},
++	)
++
+ 	ScraperRequestDuration = prometheus.NewHistogramVec(
+ 		prometheus.HistogramOpts{
+ 			Namespace: "miniflux",
+@@ -151,6 +159,7 @@ type collector struct {
+ // NewCollector initializes a new metric collector.
+ func NewCollector(store *storage.Storage, refreshInterval time.Duration) *collector {
+ 	prometheus.MustRegister(BackgroundFeedRefreshDuration)
++	prometheus.MustRegister(BackgroundFeedRefreshFailures)
+ 	prometheus.MustRegister(ScraperRequestDuration)
+ 	prometheus.MustRegister(ArchiveEntriesDuration)
+ 	prometheus.MustRegister(usersGauge)
+diff --git a/internal/worker/worker.go b/internal/worker/worker.go
+index 01afb1ad..d653b841 100644
+--- a/internal/worker/worker.go
++++ b/internal/worker/worker.go
+@@ -50,6 +50,7 @@ func (w *worker) Run(c <-chan model.Job, shutdown <-chan struct{}, wg *sync.Wait
+ 			status := metric.StatusSuccess
+ 			if localizedError != nil {
+ 				status = metric.StatusError
++				metric.BackgroundFeedRefreshFailures.Inc()
+ 			}
+ 			metric.BackgroundFeedRefreshDuration.WithLabelValues(status).Observe(time.Since(startTime).Seconds())
+ 		}

@@ -1,0 +1,62 @@
+diff --git a/app/jobs/boost/push_job.rb b/app/jobs/boost/push_job.rb
+new file mode 100644
+index 0000000..7abb95f
+--- /dev/null
++++ b/app/jobs/boost/push_job.rb
+@@ -0,0 +1,5 @@
++class Boost::PushJob < ApplicationJob
++  def perform(boost)
++    Boost::Pusher.new(boost:).push
++  end
++end
+diff --git a/app/models/boost.rb b/app/models/boost.rb
+index c8101ae..a41a2ba 100644
+--- a/app/models/boost.rb
++++ b/app/models/boost.rb
+@@ -2,5 +2,7 @@ class Boost < ApplicationRecord
+   belongs_to :message, touch: true
+   belongs_to :booster, class_name: "User", default: -> { Current.user }
+ 
++  after_create_commit -> { Boost::PushJob.perform_later(self) }
++
+   scope :ordered, -> { order(:created_at) }
+ end
+diff --git a/app/models/boost/pusher.rb b/app/models/boost/pusher.rb
+new file mode 100644
+index 0000000..26cfee0
+--- /dev/null
++++ b/app/models/boost/pusher.rb
+@@ -0,0 +1,33 @@
++class Boost::Pusher
++  attr_reader :boost
++
++  delegate :message, :booster, to: :boost
++  delegate :room, to: :message
++
++  def initialize(boost:)
++    @boost = boost
++  end
++
++  def push
++    return if booster == message.creator
++
++    build_payload.tap do |payload|
++      Rails.configuration.x.web_push_pool.queue(payload, relevant_subscriptions)
++    end
++  end
++
++  private
++    def build_payload
++      {
++        title: room.direct? ? booster.name : room.name,
++        body: "#{booster.name} boosted: #{message.plain_text_body.truncate(100)}",
++        path: Rails.application.routes.url_helpers.room_path(room)
++      }
++    end
++
++    def relevant_subscriptions
++      Push::Subscription
++        .joins(user: :memberships)
++        .merge(Membership.visible.disconnected.where(room: room, user: message.creator))
++    end
++end

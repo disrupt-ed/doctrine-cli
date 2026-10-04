@@ -1,0 +1,160 @@
+diff --git a/internal/storage/icon.go b/internal/storage/icon.go
+index 8c8dcef4..a4356740 100644
+--- a/internal/storage/icon.go
++++ b/internal/storage/icon.go
+@@ -54,7 +54,12 @@ func (s *Storage) IconByUserAndIconID(userID, iconID int64) (*model.Icon, error)
+ }
+ 
+ // IconByExternalID fetches an icon using its external identifier, returning nil when no match exists.
++// Found icons are cached in memory; misses are not, so unknown IDs cannot fill the cache.
+ func (s *Storage) IconByExternalID(externalIconID string) (*model.Icon, error) {
++	if icon, ok := s.iconCache.get(externalIconID); ok {
++		return icon, nil
++	}
++
+ 	var icon model.Icon
+ 	query := `
+ 		SELECT
+@@ -73,6 +78,7 @@ func (s *Storage) IconByExternalID(externalIconID string) (*model.Icon, error) {
+ 	case err != nil:
+ 		return nil, fmt.Errorf("store: cannot load icon external_id=%s: %w", externalIconID, err)
+ 	default:
++		s.iconCache.set(externalIconID, &icon)
+ 		return &icon, nil
+ 	}
+ }
+diff --git a/internal/storage/icon_cache.go b/internal/storage/icon_cache.go
+new file mode 100644
+index 00000000..ffa63c63
+--- /dev/null
++++ b/internal/storage/icon_cache.go
+@@ -0,0 +1,55 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package storage // import "miniflux.app/v2/internal/storage"
++
++import (
++	"sync"
++	"time"
++
++	"miniflux.app/v2/internal/model"
++)
++
++const (
++	iconCacheMaxEntries = 1000
++	iconCacheTTL        = time.Hour
++)
++
++type iconCacheEntry struct {
++	icon      *model.Icon
++	expiresAt time.Time
++}
++
++// iconCache keeps recently served icons in memory, keyed by external ID.
++// An icon's content never changes for a given external ID, so the TTL only
++// bounds how long an icon removed by CleanupOrphanIcons can still be served.
++// The zero value is ready to use.
++type iconCache struct {
++	mu      sync.Mutex
++	entries map[string]iconCacheEntry
++}
++
++func (c *iconCache) get(externalID string) (*model.Icon, bool) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	entry, ok := c.entries[externalID]
++	if !ok {
++		return nil, false
++	}
++	if time.Now().After(entry.expiresAt) {
++		delete(c.entries, externalID)
++		return nil, false
++	}
++	return entry.icon, true
++}
++
++func (c *iconCache) set(externalID string, icon *model.Icon) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	if c.entries == nil || len(c.entries) >= iconCacheMaxEntries {
++		c.entries = make(map[string]iconCacheEntry)
++	}
++	c.entries[externalID] = iconCacheEntry{icon: icon, expiresAt: time.Now().Add(iconCacheTTL)}
++}
+diff --git a/internal/storage/icon_cache_test.go b/internal/storage/icon_cache_test.go
+new file mode 100644
+index 00000000..34ffea63
+--- /dev/null
++++ b/internal/storage/icon_cache_test.go
+@@ -0,0 +1,48 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package storage // import "miniflux.app/v2/internal/storage"
++
++import (
++	"strconv"
++	"testing"
++	"time"
++
++	"miniflux.app/v2/internal/model"
++)
++
++func TestIconCacheHitAndMiss(t *testing.T) {
++	var c iconCache
++	if _, ok := c.get("a"); ok {
++		t.Fatal("expected miss on empty cache")
++	}
++
++	icon := &model.Icon{ID: 1}
++	c.set("a", icon)
++	if got, ok := c.get("a"); !ok || got != icon {
++		t.Fatalf("expected hit returning stored icon, got %v, %v", got, ok)
++	}
++}
++
++func TestIconCacheExpiry(t *testing.T) {
++	var c iconCache
++	c.set("a", &model.Icon{ID: 1})
++	c.entries["a"] = iconCacheEntry{icon: c.entries["a"].icon, expiresAt: time.Now().Add(-time.Second)}
++
++	if _, ok := c.get("a"); ok {
++		t.Fatal("expected expired entry to be a miss")
++	}
++	if len(c.entries) != 0 {
++		t.Fatal("expected expired entry to be removed")
++	}
++}
++
++func TestIconCacheIsBounded(t *testing.T) {
++	var c iconCache
++	for i := 0; i < iconCacheMaxEntries*3; i++ {
++		c.set(strconv.Itoa(i), &model.Icon{ID: int64(i)})
++	}
++	if len(c.entries) > iconCacheMaxEntries {
++		t.Fatalf("cache grew to %d entries, max %d", len(c.entries), iconCacheMaxEntries)
++	}
++}
+diff --git a/internal/storage/storage.go b/internal/storage/storage.go
+index ffae9692..17c30e8a 100644
+--- a/internal/storage/storage.go
++++ b/internal/storage/storage.go
+@@ -11,12 +11,13 @@ import (
+ 
+ // Storage handles all operations related to the database.
+ type Storage struct {
+-	db *sql.DB
++	db        *sql.DB
++	iconCache iconCache
+ }
+ 
+ // NewStorage returns a new Storage.
+ func NewStorage(db *sql.DB) *Storage {
+-	return &Storage{db}
++	return &Storage{db: db}
+ }
+ 
+ // DatabaseVersion returns the version of the database which is in use.

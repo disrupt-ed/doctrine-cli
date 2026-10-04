@@ -1,0 +1,125 @@
+diff --git a/app/jobs/boost/push_job.rb b/app/jobs/boost/push_job.rb
+new file mode 100644
+index 0000000..7abb95f
+--- /dev/null
++++ b/app/jobs/boost/push_job.rb
+@@ -0,0 +1,5 @@
++class Boost::PushJob < ApplicationJob
++  def perform(boost)
++    Boost::Pusher.new(boost:).push
++  end
++end
+diff --git a/app/models/boost.rb b/app/models/boost.rb
+index c8101ae..a41a2ba 100644
+--- a/app/models/boost.rb
++++ b/app/models/boost.rb
+@@ -2,5 +2,7 @@ class Boost < ApplicationRecord
+   belongs_to :message, touch: true
+   belongs_to :booster, class_name: "User", default: -> { Current.user }
+ 
++  after_create_commit -> { Boost::PushJob.perform_later(self) }
++
+   scope :ordered, -> { order(:created_at) }
+ end
+diff --git a/app/models/boost/pusher.rb b/app/models/boost/pusher.rb
+new file mode 100644
+index 0000000..84744a6
+--- /dev/null
++++ b/app/models/boost/pusher.rb
+@@ -0,0 +1,34 @@
++class Boost::Pusher
++  attr_reader :boost
++
++  delegate :message, :booster, to: :boost
++  delegate :room, to: :message
++
++  def initialize(boost:)
++    @boost = boost
++  end
++
++  def push
++    if message.creator != booster
++      build_payload.tap do |payload|
++        Rails.configuration.x.web_push_pool.queue(payload, relevant_subscriptions)
++      end
++    end
++  end
++
++  private
++    def build_payload
++      {
++        title: room.direct? ? booster.name : room.name,
++        body: "#{booster.name} boosted: #{boost.content}",
++        path: Rails.application.routes.url_helpers.room_path(room)
++      }
++    end
++
++    def relevant_subscriptions
++      Push::Subscription
++        .joins(user: :memberships)
++        .where(user_id: message.creator_id)
++        .merge(Membership.visible.disconnected.where(room: room).where.not(involvement: :nothing))
++    end
++end
+diff --git a/test/models/boost/push_test.rb b/test/models/boost/push_test.rb
+new file mode 100644
+index 0000000..5040b1a
+--- /dev/null
++++ b/test/models/boost/push_test.rb
+@@ -0,0 +1,56 @@
++require "test_helper"
++
++class Boost::PushTest < ActiveSupport::TestCase
++  include ActiveJob::TestHelper
++
++  setup do
++    stub_web_push_dns_resolution
++    @message = rooms(:designers).messages.create! body: "Boost me", client_message_id: "boostme", creator: users(:david)
++  end
++
++  test "notifies the message creator when boosted" do
++    count = users(:david).push_subscriptions.count
++    assert_operator count, :>, 0
++
++    perform_enqueued_jobs only: Boost::PushJob do
++      WebPush.expects(:payload_send).times(count)
++      @message.boosts.create! booster: users(:kevin), content: "👍"
++    end
++    wait_for_pool_tasks(count)
++  end
++
++  test "does not notify when boosting your own message" do
++    perform_enqueued_jobs only: Boost::PushJob do
++      WebPush.expects(:payload_send).never
++      @message.boosts.create! booster: users(:david), content: "👍"
++    end
++  end
++
++  test "does not notify when the creator is connected to the room" do
++    memberships(:david_designers).connected
++
++    perform_enqueued_jobs only: Boost::PushJob do
++      WebPush.expects(:payload_send).never
++      @message.boosts.create! booster: users(:kevin), content: "👍"
++    end
++  end
++
++  test "does not notify when the creator has muted the room" do
++    memberships(:david_designers).update! involvement: "nothing"
++
++    perform_enqueued_jobs only: Boost::PushJob do
++      WebPush.expects(:payload_send).never
++      @message.boosts.create! booster: users(:kevin), content: "👍"
++    end
++  end
++
++  private
++    def wait_for_pool_tasks(count)
++      pool = Rails.configuration.x.web_push_pool.delivery_pool
++      start = Time.now
++      while pool.completed_task_count < count
++        raise "Timeout waiting for pool tasks to complete" if Time.now - start > 0.2
++        sleep 0.02
++      end
++    end
++end

@@ -1,0 +1,163 @@
+diff --git a/internal/cli/cleanup_tasks.go b/internal/cli/cleanup_tasks.go
+index f7b0c37d..3dc5b5b5 100644
+--- a/internal/cli/cleanup_tasks.go
++++ b/internal/cli/cleanup_tasks.go
+@@ -48,6 +48,16 @@ func runCleanupTasks(store *storage.Storage) {
+ 		}
+ 	}
+ 
++	if maxEntries := config.Opts.CleanupMaxEntriesPerFeed(); maxEntries > 0 {
++		if rowsAffected, err := store.ArchiveEntriesOverFeedLimit(maxEntries, config.Opts.CleanupArchiveBatchSize()); err != nil {
++			slog.Error("Unable to archive entries over the feed limit", slog.Any("error", err))
++		} else {
++			slog.Info("Archiving entries over the feed limit completed",
++				slog.Int64("entries_archived", rowsAffected),
++			)
++		}
++	}
++
+ 	if nbIcons, err := store.CleanupOrphanIcons(); err != nil {
+ 		slog.Error("Unable to clean orphan icons", slog.Any("error", err))
+ 	} else {
+diff --git a/internal/config/options.go b/internal/config/options.go
+index c12a5caa..350688de 100644
+--- a/internal/config/options.go
++++ b/internal/config/options.go
+@@ -149,6 +149,14 @@ func NewConfigOptions() *configOptions {
+ 					return validateGreaterOrEqualThan(rawValue, 1)
+ 				},
+ 			},
++			"CLEANUP_MAX_ENTRIES_PER_FEED": {
++				parsedIntValue: 0,
++				rawValue:       "0",
++				valueType:      intType,
++				validator: func(rawValue string) error {
++					return validateGreaterOrEqualThan(rawValue, 0)
++				},
++			},
+ 			"CLEANUP_REMOVE_SESSIONS_DAYS": {
+ 				parsedDuration: time.Hour * 24 * 30,
+ 				rawValue:       "30",
+@@ -676,6 +684,10 @@ func (c *configOptions) CleanupFrequency() time.Duration {
+ 	return c.options["CLEANUP_FREQUENCY_HOURS"].parsedDuration
+ }
+ 
++func (c *configOptions) CleanupMaxEntriesPerFeed() int {
++	return c.options["CLEANUP_MAX_ENTRIES_PER_FEED"].parsedIntValue
++}
++
+ func (c *configOptions) CleanupRemoveSessionsInterval() time.Duration {
+ 	return c.options["CLEANUP_REMOVE_SESSIONS_DAYS"].parsedDuration
+ }
+diff --git a/internal/config/options_parsing_test.go b/internal/config/options_parsing_test.go
+index cd5a8468..d6b13f13 100644
+--- a/internal/config/options_parsing_test.go
++++ b/internal/config/options_parsing_test.go
+@@ -292,6 +292,26 @@ func TestCleanupArchiveBatchSizeOptionParsing(t *testing.T) {
+ 	}
+ }
+ 
++func TestCleanupMaxEntriesPerFeedOptionParsing(t *testing.T) {
++	configParser := NewConfigParser()
++
++	if configParser.options.CleanupMaxEntriesPerFeed() != 0 {
++		t.Fatalf("Expected CLEANUP_MAX_ENTRIES_PER_FEED to be 0 by default")
++	}
++
++	if err := configParser.parseLines([]string{"CLEANUP_MAX_ENTRIES_PER_FEED=500"}); err != nil {
++		t.Fatalf("Unexpected error: %v", err)
++	}
++
++	if configParser.options.CleanupMaxEntriesPerFeed() != 500 {
++		t.Fatalf("Expected CLEANUP_MAX_ENTRIES_PER_FEED to be 500")
++	}
++
++	if err := configParser.parseLines([]string{"CLEANUP_MAX_ENTRIES_PER_FEED=-1"}); err == nil {
++		t.Fatalf("Expected an error for a negative CLEANUP_MAX_ENTRIES_PER_FEED")
++	}
++}
++
+ func TestCreateAdminOptionParsing(t *testing.T) {
+ 	configParser := NewConfigParser()
+ 
+diff --git a/internal/storage/entry.go b/internal/storage/entry.go
+index f7f5e6f6..b92dadec 100644
+--- a/internal/storage/entry.go
++++ b/internal/storage/entry.go
+@@ -408,6 +408,53 @@ func (s *Storage) ArchiveEntries(status string, interval time.Duration, limit in
+ 	return count, nil
+ }
+ 
++// ArchiveEntriesOverFeedLimit deletes the oldest entries of each feed that has more than maxEntries entries
++// and records tombstones so they are not re-ingested. Starred and shared entries are never deleted.
++func (s *Storage) ArchiveEntriesOverFeedLimit(maxEntries, limit int) (int64, error) {
++	if maxEntries <= 0 || limit <= 0 {
++		return 0, nil
++	}
++
++	query := `
++		WITH ranked AS (
++			SELECT
++				id,
++				ROW_NUMBER() OVER (PARTITION BY feed_id ORDER BY published_at DESC, id DESC) AS position
++			FROM entries
++		), to_delete AS (
++			SELECT id, feed_id, hash
++			FROM entries
++			WHERE
++				id IN (SELECT id FROM ranked WHERE position > $1) AND
++				starred is false AND
++				share_code=''
++			ORDER BY published_at ASC, id ASC
++			FOR UPDATE SKIP LOCKED
++			LIMIT $2
++		), deleted AS (
++			DELETE FROM entries
++			USING to_delete
++			WHERE entries.id = to_delete.id
++			RETURNING entries.feed_id, entries.hash
++		)
++		INSERT INTO entry_tombstones (feed_id, hash)
++		SELECT feed_id, hash FROM deleted WHERE hash <> ''
++		ON CONFLICT (feed_id, hash) DO NOTHING
++	`
++
++	result, err := s.db.Exec(query, maxEntries, limit)
++	if err != nil {
++		return 0, fmt.Errorf(`store: unable to archive entries over the feed limit: %v`, err)
++	}
++
++	count, err := result.RowsAffected()
++	if err != nil {
++		return 0, fmt.Errorf(`store: unable to get the number of rows affected: %v`, err)
++	}
++
++	return count, nil
++}
++
+ // SetEntriesStatus update the status of the given list of entries.
+ func (s *Storage) SetEntriesStatus(userID int64, entryIDs []int64, status string) error {
+ 	query := `
+diff --git a/miniflux.1 b/miniflux.1
+index b9cb1c14..e3c4d7bc 100644
+--- a/miniflux.1
++++ b/miniflux.1
+@@ -227,6 +227,18 @@ Cleanup job frequency. Remove old sessions and archive entries\&.
+ .br
+ Default is 24 hours\&.
+ .TP
++.B CLEANUP_MAX_ENTRIES_PER_FEED
++Maximum number of entries to keep per feed\&.
++.br
++When a feed has more entries, the cleanup job deletes the oldest ones
++(by publication date) and records a tombstone to prevent them from being
++imported again during a later feed refresh\&. Bookmarked and shared entries
++are never deleted, but they count towards the limit\&.
++.br
++Set to 0 to disable the limit\&.
++.br
++Disabled by default\&.
++.TP
+ .B CLEANUP_REMOVE_SESSIONS_DAYS
+ Number of days after removing old sessions from the database\&.
+ .br

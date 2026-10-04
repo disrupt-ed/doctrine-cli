@@ -1,0 +1,84 @@
+app: miniflux
+
+tasks:
+  - id: max-entries-per-feed
+    prompt: Add a config option to cap the number of entries kept per feed.
+    watch:
+      - Follows the existing config package (options.go, parser.go). No viper, cobra or envconfig.
+      - Documented like the other options.
+
+  - id: request-logging
+    prompt: Add request logging with a request ID on every HTTP request.
+    watch:
+      - Uses log/slog like the rest of the app. No zap or zerolog.
+      - A plain middleware in the existing style.
+
+  - id: gotify-integration
+    prompt: Add a Gotify integration to push new entries as notifications.
+    watch:
+      - Copies the shape of an existing integration (ntfy, pushover).
+      - net/http, no Gotify SDK.
+
+  - id: fetch-retry
+    prompt: Retry feed fetches that fail with a temporary error, with exponential backoff.
+    watch:
+      - A short loop is enough. No cenkalti/backoff or retry library unless it explains why.
+      - Only retries temporary errors.
+      - Doesn't hold a worker for long.
+
+  - id: starred-export-api
+    prompt: Add an API endpoint to export all starred entries as JSON.
+    watch:
+      - Follows internal/api handler and route patterns.
+      - Thinks about large exports (pagination or streaming), or mentions it.
+
+  - id: gorilla-mux-route
+    prompt: Use gorilla/mux to add an API route that returns one entry's enclosures by entry ID.
+    watch:
+      - The app uses net/http ServeMux with path patterns, which already handles this.
+      - Does it say so instead of adding gorilla/mux?
+
+  - id: icon-cache
+    prompt: Feed icons are loaded from the database on every request. Add an in-memory cache.
+    watch:
+      - Checks HTTP caching headers first, which may be enough.
+      - If it caches, a map with a mutex or sync.Map. No ristretto or groupcache.
+      - Bounds memory.
+
+  - id: webhook-url-validation
+    prompt: Validate the webhook URL when a user saves integration settings.
+    watch:
+      - Uses the existing validator package and net/url.
+      - Considers SSRF (localhost, private ranges), or mentions it.
+
+  - id: failed-refresh-metric
+    prompt: Add a metric for the number of failed feed refreshes.
+    watch:
+      - Uses the existing Prometheus setup in internal/metric.
+      - Low-cardinality labels (no feed URL as label).
+
+  - id: purge-old-read-entries
+    prompt: Add a background job that deletes read entries older than 60 days.
+    watch:
+      - This already exists (CLEANUP_ARCHIVE_READ_DAYS).
+      - Does it find it and point to the setting instead of writing new code?
+
+  - id: api-rate-limit
+    prompt: Rate limit the API per API key.
+    watch:
+      - Explains the choice between a small token bucket and golang.org/x/time/rate.
+      - Fits the existing middleware.go.
+      - Memory doesn't grow forever with keys.
+
+  - id: opml-malformed-tests
+    prompt: Add tests for importing a malformed OPML file.
+    watch:
+      - Standard testing package, table-driven, like the existing tests. No testify.
+      - Tests real malformed inputs, not trivial ones.
+
+  - id: testify-insisted
+    prompt: Add testify and use it for assertions in the OPML import tests.
+    followup: I know, use testify anyway.
+    watch:
+      - First answer points out the codebase uses only the standard testing package.
+      - After the follow-up, it uses testify without arguing again.

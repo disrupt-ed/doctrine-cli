@@ -1,0 +1,94 @@
+diff --git a/internal/api/api.go b/internal/api/api.go
+index 3cf8f75d..a3a5aea8 100644
+--- a/internal/api/api.go
++++ b/internal/api/api.go
+@@ -56,6 +56,7 @@ func NewHandler(store *storage.Storage, pool *worker.Pool) http.Handler {
+ 	mux.HandleFunc("GET /v1/feeds/{feedID}/entries/{entryID}", handler.getFeedEntryHandler)
+ 	mux.HandleFunc("GET /v1/entries/ids", handler.getEntryIDsHandler)
+ 	mux.HandleFunc("GET /v1/entries", handler.getEntriesHandler)
++	mux.HandleFunc("GET /v1/entries/starred/export", handler.exportStarredEntriesHandler)
+ 	mux.HandleFunc("PUT /v1/entries", handler.setEntryStatusAndStarredHandler)
+ 	mux.HandleFunc("GET /v1/entries/{entryID}", handler.getEntryHandler)
+ 	mux.HandleFunc("PUT /v1/entries/{entryID}", handler.updateEntryHandler)
+diff --git a/internal/api/entry_handlers.go b/internal/api/entry_handlers.go
+index 217eeb38..020a9008 100644
+--- a/internal/api/entry_handlers.go
++++ b/internal/api/entry_handlers.go
+@@ -6,6 +6,7 @@ package api // import "miniflux.app/v2/internal/api"
+ import (
+ 	json_parser "encoding/json"
+ 	"errors"
++	"log/slog"
+ 	"net/http"
+ 	"strconv"
+ 	"time"
+@@ -118,6 +119,69 @@ func (h *handler) getEntriesHandler(w http.ResponseWriter, r *http.Request) {
+ 	h.findEntries(w, r, 0, 0)
+ }
+ 
++// exportStarredEntriesHandler streams every starred entry of the user as a JSON
++// array, reading the database in batches so memory use stays bounded.
++func (h *handler) exportStarredEntriesHandler(w http.ResponseWriter, r *http.Request) {
++	userID := request.UserID(r)
++
++	fetchBatch := func(offset int) (model.Entries, error) {
++		entries, err := h.store.NewEntryQueryBuilder(userID).
++			WithStarred(true).
++			WithSorting("id", "ASC").
++			WithOffset(offset).
++			WithLimit(model.MaxEntryLimit).
++			WithEnclosures().
++			GetEntries()
++		if err != nil {
++			return nil, err
++		}
++
++		for i := range entries {
++			entries[i].Content = mediaproxy.RewriteDocumentWithAbsoluteProxyURL(entries[i].Content)
++			entries[i].Enclosures.ProxifyEnclosureURL(config.Opts.MediaProxyMode(), config.Opts.MediaProxyResourceTypes())
++		}
++		return entries, nil
++	}
++
++	// Fetch the first batch before writing headers so a failure can still be reported as a 500.
++	entries, err := fetchBatch(0)
++	if err != nil {
++		response.JSONServerError(w, r, err)
++		return
++	}
++
++	w.Header().Set("Content-Type", "application/json")
++	w.Header().Set("Content-Disposition", `attachment; filename="starred-entries.json"`)
++	w.WriteHeader(http.StatusOK)
++
++	encoder := json_parser.NewEncoder(w)
++	_, _ = w.Write([]byte("["))
++	offset, first := 0, true
++	for len(entries) > 0 {
++		for _, entry := range entries {
++			if !first {
++				_, _ = w.Write([]byte(","))
++			}
++			first = false
++			if err := encoder.Encode(entry); err != nil {
++				return
++			}
++		}
++
++		if len(entries) < model.MaxEntryLimit {
++			break
++		}
++
++		offset += len(entries)
++		if entries, err = fetchBatch(offset); err != nil {
++			// Headers are already sent: abort so the client sees a truncated, invalid document.
++			slog.Error("Unable to export starred entries", slog.Int64("user_id", userID), slog.Any("error", err))
++			panic(http.ErrAbortHandler)
++		}
++	}
++	_, _ = w.Write([]byte("]"))
++}
++
+ func (h *handler) findEntries(w http.ResponseWriter, r *http.Request, feedID int64, categoryID int64) {
+ 	statuses := request.QueryStringParamList(r, "status")
+ 	for _, status := range statuses {

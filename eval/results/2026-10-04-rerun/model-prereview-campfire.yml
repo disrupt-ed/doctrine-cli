@@ -1,0 +1,51 @@
+- task: room-transcript-csv
+  prefer: A
+  why: "Both add a nested transcript resource behind RoomScoped. A adds the one-line `gem \"csv\"` and uses the csv library. B writes its own CSV escaper to avoid the Gemfile line, which is more code to maintain for no real gain."
+
+- task: message-rate-limit
+  prefer: A
+  why: "Both use the built-in rate_limit, keyed by Current.user.id. A also adds a working test that swaps in a memory store. B only explains why it left the test out."
+
+- task: monday-unread-push
+  prefer: A
+  why: "Both reuse the web push pool, add a rake task for cron and explain why they didn't add resque-scheduler. A counts unread rooms in one grouped query and covers more cases in its tests. B runs a count query per user."
+
+- task: users-pagination-kaminari
+  prefer: B
+  why: "Both pick geared_pagination and make the same diff. B also points out that `edit` still loads every user through `partition`, so the page isn't actually lighter yet."
+
+- task: normalize-room-names
+  prefer: B
+  why: "B uses the built-in `normalizes` and adds a test. A writes a hand-rolled before_validation callback and adds no test. Both offer to backfill existing rows."
+
+- task: my-rooms-json
+  prefer: B
+  why: "Same controller change and Jbuilder view, both using Membership#unread?. B's test checks the read rooms as well as the unread one, so it is stronger."
+
+- task: message-edit-history
+  prefer: A
+  why: "A stores the old body as Action Text, so mentions and attachments survive, and it hooks the model so every update path is covered. B saves the HTML as plain text and renders it escaped in the view. B's controller test also checks the current text, not the original."
+
+- task: slow-sidebar
+  prefer: A
+  why: "Both remove the extra query and the pluck round-trip. A also fixes the per-room users query that runs when a direct-room fragment isn't cached. B only notes that cost and leaves it."
+
+- task: link-previews-metainspector
+  prefer: same
+  why: "Both find the existing Opengraph/UnfurlLinksController stack and explain the SSRF guard that metainspector would bypass. Both decline to add the gem and ask what is missing."
+
+- task: message-length-limit
+  prefer: A
+  why: "The two changes are nearly the same: server validation plus a counter in the existing composer controller. Both have the same missing-space typo in the data-action. A adds a boundary model test; B adds none."
+
+- task: composer-feature-flag
+  prefer: same
+  why: "Both find there is no second composer and no flag system. Both propose a small hashed-bucket Feature model with no gem, and both ask what 'new composer' means before building anything."
+
+- task: boost-push
+  prefer: A
+  why: "Both reuse the push pool and the job pattern, and both skip pushes when the author is connected or the room is invisible to them. A includes tests; B has none."
+
+- task: faraday-insisted
+  prefer: B
+  why: "A switched to Faraday straight away and never mentioned that Net::HTTP already works. B said so first, then did the switch after the follow-up without arguing again. Both keep the timeouts and the comment about not using the private-network guard."

@@ -1,0 +1,108 @@
+diff --git a/internal/locale/translations/en_US.json b/internal/locale/translations/en_US.json
+index f423e952..122e5e25 100644
+--- a/internal/locale/translations/en_US.json
++++ b/internal/locale/translations/en_US.json
+@@ -133,6 +133,7 @@
+     "error.invalid_site_url": "Invalid site URL.",
+     "error.invalid_theme": "Invalid theme.",
+     "error.invalid_timezone": "Invalid timezone.",
++    "error.invalid_webhook_url": "Invalid webhook URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux is not able to reach this website due to a network error: %v.",
+     "error.network_timeout": "This website is too slow and the request timed out: %v",
+diff --git a/internal/ui/form/integration.go b/internal/ui/form/integration.go
+index a41c26dd..5f152655 100644
+--- a/internal/ui/form/integration.go
++++ b/internal/ui/form/integration.go
+@@ -5,10 +5,12 @@ package form // import "miniflux.app/v2/internal/ui/form"
+ 
+ import (
+ 	"net/http"
++	"net/url"
+ 	"strconv"
+ 
+ 	"miniflux.app/v2/internal/locale"
+ 	"miniflux.app/v2/internal/model"
++	"miniflux.app/v2/internal/urllib"
+ )
+ 
+ // IntegrationForm represents user integration settings form.
+@@ -269,6 +271,21 @@ func (i IntegrationForm) ValidateGoogleReader(storedPasswordHash string) *locale
+ 	return nil
+ }
+ 
++// ValidateWebhook ensures the webhook URL, when the integration is enabled, is an absolute HTTP or HTTPS URL with a host.
++// An empty URL is allowed: the handler disables the integration in that case.
++func (i IntegrationForm) ValidateWebhook() *locale.LocalizedError {
++	if !i.WebhookEnabled || i.WebhookURL == "" {
++		return nil
++	}
++	if !urllib.IsAbsoluteURL(i.WebhookURL) {
++		return locale.NewLocalizedError("error.invalid_webhook_url")
++	}
++	if parsedURL, err := url.Parse(i.WebhookURL); err != nil || parsedURL.Host == "" {
++		return locale.NewLocalizedError("error.invalid_webhook_url")
++	}
++	return nil
++}
++
+ // NewIntegrationForm returns a new IntegrationForm.
+ func NewIntegrationForm(r *http.Request) *IntegrationForm {
+ 	return &IntegrationForm{
+diff --git a/internal/ui/form/integration_test.go b/internal/ui/form/integration_test.go
+index e8d7f59b..e7598d29 100644
+--- a/internal/ui/form/integration_test.go
++++ b/internal/ui/form/integration_test.go
+@@ -7,6 +7,35 @@ import (
+ 	"testing"
+ )
+ 
++func TestValidateWebhook(t *testing.T) {
++	scenarios := []struct {
++		name        string
++		form        IntegrationForm
++		expectError bool
++	}{
++		{name: "disabled with invalid URL", form: IntegrationForm{WebhookURL: "nope"}},
++		{name: "enabled with empty URL", form: IntegrationForm{WebhookEnabled: true}},
++		{name: "https URL", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "https://example.org/hook?a=b"}},
++		{name: "http URL with port", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "http://localhost:8080/hook"}},
++		{name: "no scheme", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "example.org/hook"}, expectError: true},
++		{name: "unsupported scheme", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "ftp://example.org/hook"}, expectError: true},
++		{name: "no host", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "http:///hook"}, expectError: true},
++		{name: "opaque URL", form: IntegrationForm{WebhookEnabled: true, WebhookURL: "http:example.org"}, expectError: true},
++	}
++
++	for _, scenario := range scenarios {
++		t.Run(scenario.name, func(t *testing.T) {
++			validationErr := scenario.form.ValidateWebhook()
++			if scenario.expectError && validationErr == nil {
++				t.Fatal("expected a validation error")
++			}
++			if !scenario.expectError && validationErr != nil {
++				t.Fatalf("unexpected validation error: %v", validationErr)
++			}
++		})
++	}
++}
++
+ func TestValidateGoogleReader(t *testing.T) {
+ 	scenarios := []struct {
+ 		name               string
+diff --git a/internal/ui/integration_update.go b/internal/ui/integration_update.go
+index ffa68ce3..ecd849e1 100644
+--- a/internal/ui/integration_update.go
++++ b/internal/ui/integration_update.go
+@@ -49,6 +49,12 @@ func (h *handler) updateIntegration(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 
++	if validationErr := integrationForm.ValidateWebhook(); validationErr != nil {
++		sess.SetErrorMessage(validationErr.Translate(sess.Language()))
++		response.HTMLRedirect(w, r, h.routePath("/integrations"))
++		return
++	}
++
+ 	if integration.GoogleReaderUsername != "" && h.store.HasDuplicateGoogleReaderUsername(userID, integration.GoogleReaderUsername) {
+ 		sess.SetErrorMessage(printer.Print("error.duplicate_googlereader_username"))
+ 		response.HTMLRedirect(w, r, h.routePath("/integrations"))

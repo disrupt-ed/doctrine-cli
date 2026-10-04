@@ -1,0 +1,155 @@
+diff --git a/internal/http/request/context.go b/internal/http/request/context.go
+index 69e09150..5896365e 100644
+--- a/internal/http/request/context.go
++++ b/internal/http/request/context.go
+@@ -21,6 +21,7 @@ const (
+ 	IsAuthenticatedContextKey
+ 	WebSessionContextKey
+ 	ClientIPContextKey
++	RequestIDContextKey
+ 	GoogleReaderTokenKey
+ )
+ 
+@@ -95,6 +96,11 @@ func ClientIP(r *http.Request) string {
+ 	return getContextStringValue(r, ClientIPContextKey)
+ }
+ 
++// RequestID returns the request ID stored in the request context.
++func RequestID(r *http.Request) string {
++	return getContextStringValue(r, RequestIDContextKey)
++}
++
+ func getContextStringValue(r *http.Request, key ContextKey) string {
+ 	if v := r.Context().Value(key); v != nil {
+ 		if value, valid := v.(string); valid {
+diff --git a/internal/http/server/middleware.go b/internal/http/server/middleware.go
+index 50c25b16..ed9c7631 100644
+--- a/internal/http/server/middleware.go
++++ b/internal/http/server/middleware.go
+@@ -5,6 +5,7 @@ package server // import "miniflux.app/v2/internal/http/server"
+ 
+ import (
+ 	"context"
++	"crypto/rand"
+ 	"log/slog"
+ 	"net/http"
+ 	"time"
+@@ -13,6 +14,24 @@ import (
+ 	"miniflux.app/v2/internal/http/request"
+ )
+ 
++// statusRecorder captures the response status code for logging.
++type statusRecorder struct {
++	http.ResponseWriter
++	status int
++}
++
++func (s *statusRecorder) WriteHeader(code int) {
++	if s.status == 0 {
++		s.status = code
++	}
++	s.ResponseWriter.WriteHeader(code)
++}
++
++// Unwrap lets http.ResponseController reach the underlying writer.
++func (s *statusRecorder) Unwrap() http.ResponseWriter {
++	return s.ResponseWriter
++}
++
+ func middleware(next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		remoteIP := request.FindRemoteIP(r)
+@@ -21,18 +40,30 @@ func middleware(next http.Handler) http.Handler {
+ 		ctx := r.Context()
+ 		ctx = context.WithValue(ctx, request.ClientIPContextKey, clientIP)
+ 
++		// The ID is always generated: a client-supplied value would be untrusted input in the logs.
++		requestID := rand.Text()
++		ctx = context.WithValue(ctx, request.RequestIDContextKey, requestID)
++		w.Header().Set("X-Request-Id", requestID)
++		rec := &statusRecorder{ResponseWriter: w}
++
+ 		if isTrustedProxyClientIP && r.Header.Get("X-Forwarded-Proto") == "https" {
+ 			config.Opts.SetHTTPSValue(true)
+ 		}
+ 
+ 		t1 := time.Now()
+ 		defer func() {
+-			slog.Debug("Incoming request",
++			status := rec.status
++			if status == 0 {
++				status = http.StatusOK
++			}
++			slog.Info("Incoming request",
++				slog.String("request_id", requestID),
+ 				slog.String("client_ip", clientIP),
+ 				slog.Group("request",
+ 					slog.String("method", r.Method),
+ 					slog.String("uri", r.RequestURI),
+ 					slog.String("protocol", r.Proto),
++					slog.Int("status", status),
+ 					slog.Duration("execution_time", time.Since(t1)),
+ 				),
+ 			)
+@@ -42,6 +73,6 @@ func middleware(next http.Handler) http.Handler {
+ 			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+ 		}
+ 
+-		next.ServeHTTP(w, r.WithContext(ctx))
++		next.ServeHTTP(rec, r.WithContext(ctx))
+ 	})
+ }
+diff --git a/internal/http/server/middleware_test.go b/internal/http/server/middleware_test.go
+new file mode 100644
+index 00000000..1b23b95d
+--- /dev/null
++++ b/internal/http/server/middleware_test.go
+@@ -0,0 +1,48 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package server // import "miniflux.app/v2/internal/http/server"
++
++import (
++	"bytes"
++	"log/slog"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"miniflux.app/v2/internal/config"
++	"miniflux.app/v2/internal/http/request"
++)
++
++func TestMiddlewareRequestID(t *testing.T) {
++	config.Opts = config.NewOptions()
++
++	var buf bytes.Buffer
++	previous := slog.Default()
++	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
++	t.Cleanup(func() { slog.SetDefault(previous) })
++
++	var seen string
++	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		seen = request.RequestID(r)
++		w.WriteHeader(http.StatusTeapot)
++	}))
++
++	r := httptest.NewRequest(http.MethodGet, "/", nil)
++	r.Header.Set("X-Request-Id", "spoofed")
++	w := httptest.NewRecorder()
++	handler.ServeHTTP(w, r)
++
++	id := w.Header().Get("X-Request-Id")
++	if id == "" || id == "spoofed" || id != seen {
++		t.Fatalf("unexpected request ID: header=%q context=%q", id, seen)
++	}
++
++	logged := buf.String()
++	for _, want := range []string{"request_id=" + id, "request.status=418"} {
++		if !strings.Contains(logged, want) {
++			t.Errorf("log line missing %q: %s", want, logged)
++		}
++	}
++}

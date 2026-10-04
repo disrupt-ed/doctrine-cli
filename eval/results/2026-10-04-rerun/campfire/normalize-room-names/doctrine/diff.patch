@@ -1,0 +1,29 @@
+diff --git a/app/models/room.rb b/app/models/room.rb
+index 20865fc..6da7909 100644
+--- a/app/models/room.rb
++++ b/app/models/room.rb
+@@ -22,6 +22,8 @@ class Room < ApplicationRecord
+ 
+   belongs_to :creator, class_name: "User", default: -> { Current.user }
+ 
++  normalizes :name, with: ->(name) { name.strip }
++
+   validate :direct_rooms_keep_their_type, on: :update
+ 
+   scope :opens,           -> { where(type: "Rooms::Open") }
+diff --git a/test/models/room_test.rb b/test/models/room_test.rb
+index b113726..5c8760e 100644
+--- a/test/models/room_test.rb
++++ b/test/models/room_test.rb
+@@ -1,6 +1,11 @@
+ require "test_helper"
+ 
+ class RoomTest < ActiveSupport::TestCase
++  test "strips surrounding whitespace from the name" do
++    room = Rooms::Open.create!(name: "  Lobby \n", creator: users(:david))
++    assert_equal "Lobby", room.name
++  end
++
+   test "grant membership to user" do
+     rooms(:watercooler).memberships.grant_to(users(:kevin))
+     assert rooms(:watercooler).users.include?(users(:kevin))

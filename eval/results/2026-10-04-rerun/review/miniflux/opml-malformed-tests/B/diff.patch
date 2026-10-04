@@ -1,0 +1,83 @@
+diff --git a/internal/reader/opml/parser_test.go b/internal/reader/opml/parser_test.go
+index 271b3755..a32c9e8a 100644
+--- a/internal/reader/opml/parser_test.go
++++ b/internal/reader/opml/parser_test.go
+@@ -276,6 +276,78 @@ func TestParseInvalidXML(t *testing.T) {
+ 	}
+ }
+ 
++func TestParseMalformedOPMLReturnsError(t *testing.T) {
++	testCases := []struct {
++		name string
++		data string
++	}{
++		{"empty input", ``},
++		{"whitespace only", " \n\t "},
++		{"wrong root element", `<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>`},
++		{"truncated document", `<?xml version="1.0"?><opml version="2.0"><body><outline type="rss" xmlUrl="http://example.org/feed"`},
++		{"unknown charset", `<?xml version="1.0" encoding="not-a-charset"?><opml version="2.0"><body></body></opml>`},
++		{
++			"invalid miniflux boolean attribute",
++			`<?xml version="1.0"?>
++			<opml version="2.0" xmlns:miniflux="https://miniflux.app/opml">
++				<body>
++					<outline type="rss" xmlUrl="http://example.org/feed" miniflux:crawler="maybe"/>
++				</body>
++			</opml>`,
++		},
++	}
++
++	for _, tc := range testCases {
++		t.Run(tc.name, func(t *testing.T) {
++			subscriptions, err := parse(bytes.NewBufferString(tc.data))
++			if err == nil {
++				t.Fatalf("Parse should generate an error, got subscriptions: %v", subscriptions)
++			}
++			if subscriptions != nil {
++				t.Errorf("Expected nil subscriptions on error, got: %v", subscriptions)
++			}
++		})
++	}
++}
++
++func TestParseMalformedOPMLSkipsUnusableOutlines(t *testing.T) {
++	data := `<?xml version="1.0"?>
++	<opml version="2.0">
++		<body>
++			<outline text="No feed URL"/>
++			<outline type="rss" text="Blank feed URL" xmlUrl="   "/>
++			<outline text="Empty category"></outline>
++			<outline type="rss" text="Valid" xmlUrl="http://example.org/feed"/>
++		</body>
++	</opml>`
++
++	subscriptions, err := parse(bytes.NewBufferString(data))
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	if len(subscriptions) != 1 {
++		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(subscriptions), 1)
++	}
++
++	if subscriptions[0].FeedURL != "http://example.org/feed" || subscriptions[0].Title != "Valid" {
++		t.Errorf("Unexpected subscription: %v", subscriptions[0])
++	}
++}
++
++func TestParseOPMLWithoutBody(t *testing.T) {
++	data := `<?xml version="1.0"?><opml version="2.0"><head><title>Empty</title></head></opml>`
++
++	subscriptions, err := parse(bytes.NewBufferString(data))
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	if len(subscriptions) != 0 {
++		t.Errorf("Wrong number of subscriptions: %d instead of %d", len(subscriptions), 0)
++	}
++}
++
+ func TestParseOpmlWithMinifluxSettings(t *testing.T) {
+ 	data := `<?xml version="1.0" encoding="utf-8"?>
+ 	<opml version="2.0" xmlns:miniflux="https://miniflux.app/opml">

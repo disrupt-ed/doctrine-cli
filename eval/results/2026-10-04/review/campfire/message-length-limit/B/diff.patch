@@ -1,0 +1,182 @@
+diff --git a/app/assets/stylesheets/composer.css b/app/assets/stylesheets/composer.css
+index dc01aed..b9fc230 100644
+--- a/app/assets/stylesheets/composer.css
++++ b/app/assets/stylesheets/composer.css
+@@ -13,6 +13,16 @@
+   }
+ }
+ 
++.composer__counter {
++  font-variant-numeric: tabular-nums;
++  text-align: end;
++
++  &.composer__counter--over {
++    color: var(--color-negative, #c00);
++    font-weight: 600;
++  }
++}
++
+ /* Attachments */
+ .composer__attachment-btn {
+   --hover-filter: brightness(0.85);
+diff --git a/app/controllers/messages_controller.rb b/app/controllers/messages_controller.rb
+index 4cbc771..b6c9841 100644
+--- a/app/controllers/messages_controller.rb
++++ b/app/controllers/messages_controller.rb
+@@ -25,6 +25,8 @@ class MessagesController < ApplicationController
+     deliver_webhooks_to_bots
+   rescue ActiveRecord::RecordNotFound
+     render action: :room_not_found
++  rescue ActiveRecord::RecordInvalid
++    head :unprocessable_content
+   end
+ 
+   def show
+@@ -34,7 +36,7 @@ class MessagesController < ApplicationController
+   end
+ 
+   def update
+-    @message.update!(message_params)
++    return head :unprocessable_content unless @message.update(message_params)
+ 
+     @message.broadcast_replace_to @room, :messages, target: [ @message, :presentation ], partial: "messages/presentation", attributes: { maintain_scroll: true }
+ 
+diff --git a/app/javascript/controllers/composer_controller.js b/app/javascript/controllers/composer_controller.js
+index 104e319..7151607 100644
+--- a/app/javascript/controllers/composer_controller.js
++++ b/app/javascript/controllers/composer_controller.js
+@@ -5,14 +5,15 @@ import { escapeHTML } from "helpers/string_helpers"
+ 
+ export default class extends Controller {
+   static classes = ["toolbar"]
+-  static targets = [ "clientid", "fields", "fileList", "text" ]
+-  static values = { roomId: Number }
++  static targets = [ "clientid", "counter", "fields", "fileList", "text" ]
++  static values = { roomId: Number, maxLength: { type: Number, default: 5000 } }
+   static outlets = [ "messages" ]
+ 
+   #files = []
+ 
+   connect() {
+     this.#restoreDraft()
++    this.updateCounter()
+ 
+     if (!this.#usingTouchDevice) {
+       onNextEventLoopTick(() => this.textTarget.focus())
+@@ -27,6 +28,11 @@ export default class extends Controller {
+     }
+   }
+ 
++  updateCounter() {
++    this.counterTarget.textContent = `${this.#textLength} / ${this.maxLengthValue}`
++    this.counterTarget.classList.toggle("composer__counter--over", this.#overLimit)
++  }
++
+   submit(event) {
+     event.preventDefault()
+ 
+@@ -55,6 +61,7 @@ export default class extends Controller {
+ 
+   replaceMessageContent(content) {
+     this.textTarget.value = content
++    this.updateCounter()
+     this.textTarget.focus()
+     this.textTarget.selection.placeCursorAtTheEnd()
+   }
+@@ -148,7 +155,17 @@ export default class extends Controller {
+   }
+ 
+   #validInput() {
+-    return !this.textTarget.isBlank
++    return !this.textTarget.isBlank && !this.#overLimit
++  }
++
++  get #overLimit() {
++    return this.#textLength > this.maxLengthValue
++  }
++
++  get #textLength() {
++    const html = document.createElement("div")
++    html.innerHTML = this.textTarget.value || ""
++    return html.textContent.length
+   }
+ 
+   async #submitFiles() {
+@@ -181,6 +198,7 @@ export default class extends Controller {
+ 
+   #reset() {
+     this.textTarget.value = ""
++    this.updateCounter()
+     localStorage.removeItem(this.#draftKey)
+   }
+ 
+diff --git a/app/models/message.rb b/app/models/message.rb
+index e607f6a..0e662a5 100644
+--- a/app/models/message.rb
++++ b/app/models/message.rb
+@@ -4,10 +4,14 @@ class Message < ApplicationRecord
+   belongs_to :room, touch: true
+   belongs_to :creator, class_name: "User", default: -> { Current.user }
+ 
++  MAX_BODY_LENGTH = 5_000
++
+   has_many :boosts, dependent: :destroy
+ 
+   has_rich_text :body
+ 
++  validate :body_within_length_limit
++
+   before_create -> { self.client_message_id ||= Random.uuid } # Bots don't care
+   after_create_commit -> { room.receive(self) }
+ 
+@@ -41,4 +45,11 @@ class Message < ApplicationRecord
+       Sound.find_by_name match[:name]
+     end
+   end
++
++  private
++    def body_within_length_limit
++      if body.to_plain_text.length > MAX_BODY_LENGTH
++        errors.add :body, "is too long (maximum is #{MAX_BODY_LENGTH} characters)"
++      end
++    end
+ end
+diff --git a/app/views/rooms/show/_composer.html.erb b/app/views/rooms/show/_composer.html.erb
+index 43f961c..c0558ec 100644
+--- a/app/views/rooms/show/_composer.html.erb
++++ b/app/views/rooms/show/_composer.html.erb
+@@ -25,10 +25,12 @@
+                         "permitted-attachment-types": "application/vnd.campfire.mention application/vnd.actiontext.opengraph-embed",
+                         data: {
+                           controller: "unfurl",
+-                          action: "#{rich_text_data_actions} lexxy:change->composer#saveDraft lexxy:insert-link->unfurl#unfurl",
++                          action: "#{rich_text_data_actions} lexxy:change->composer#saveDraft lexxy:change->composer#updateCounterlexxy:insert-link->unfurl#unfurl",
+                           composer_target: "text" } do %>
+                     <%= mention_prompt_tag room %>
+                   <% end %>
++
++                  <div class="composer__counter txt-small txt-subtle" data-composer-target="counter" aria-live="polite"></div>
+                 </div>
+ 
+                 <label class="btn btn--borderless txt-small flex-item-no-shrink composer__attachment-btn input--file">
+diff --git a/test/models/message_test.rb b/test/models/message_test.rb
+index 3cd12c1..008b789 100644
+--- a/test/models/message_test.rb
++++ b/test/models/message_test.rb
+@@ -27,6 +27,16 @@ class MessageTest < ActiveSupport::TestCase
+     assert_equal [], message_mentioning_a_non_member.mentionees
+   end
+ 
++  test "body is limited to 5,000 characters" do
++    room = rooms(:designers)
++
++    assert room.messages.new(creator: users(:jason), body: "a" * 5_000).valid?
++
++    message = room.messages.new(creator: users(:jason), body: "a" * 5_001)
++    assert_not message.valid?
++    assert message.errors.of_kind?(:body, :invalid) || message.errors[:body].any?
++  end
++
+   private
+     def create_new_message_in(room)
+       room.messages.create!(creator: users(:jason), body: "Hello", client_message_id: "123")

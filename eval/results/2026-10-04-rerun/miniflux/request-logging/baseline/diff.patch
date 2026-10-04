@@ -1,0 +1,134 @@
+diff --git a/internal/http/request/context.go b/internal/http/request/context.go
+index 69e09150..84497119 100644
+--- a/internal/http/request/context.go
++++ b/internal/http/request/context.go
+@@ -22,6 +22,7 @@ const (
+ 	WebSessionContextKey
+ 	ClientIPContextKey
+ 	GoogleReaderTokenKey
++	RequestIDContextKey
+ )
+ 
+ // WebSession returns the current web session from the request context, if present.
+@@ -95,6 +96,11 @@ func ClientIP(r *http.Request) string {
+ 	return getContextStringValue(r, ClientIPContextKey)
+ }
+ 
++// RequestID returns the request ID stored in the request context.
++func RequestID(r *http.Request) string {
++	return getContextStringValue(r, RequestIDContextKey)
++}
++
+ func getContextStringValue(r *http.Request, key ContextKey) string {
+ 	if v := r.Context().Value(key); v != nil {
+ 		if value, valid := v.(string); valid {
+diff --git a/internal/http/server/middleware.go b/internal/http/server/middleware.go
+index 50c25b16..565de658 100644
+--- a/internal/http/server/middleware.go
++++ b/internal/http/server/middleware.go
+@@ -10,34 +10,84 @@ import (
+ 	"time"
+ 
+ 	"miniflux.app/v2/internal/config"
++	"miniflux.app/v2/internal/crypto"
+ 	"miniflux.app/v2/internal/http/request"
+ )
+ 
+-func middleware(next http.Handler) http.Handler {
++// statusRecorder captures the response status code for logging.
++type statusRecorder struct {
++	http.ResponseWriter
++	status int
++}
++
++func (s *statusRecorder) WriteHeader(code int) {
++	if s.status == 0 {
++		s.status = code
++	}
++	s.ResponseWriter.WriteHeader(code)
++}
++
++func (s *statusRecorder) Write(b []byte) (int, error) {
++	if s.status == 0 {
++		s.status = http.StatusOK
++	}
++	return s.ResponseWriter.Write(b)
++}
++
++// Unwrap lets http.ResponseController reach the underlying writer (Flush, Hijack, ...).
++func (s *statusRecorder) Unwrap() http.ResponseWriter {
++	return s.ResponseWriter
++}
++
++// requestLogger assigns a request ID to every request, exposes it in the
++// X-Request-Id response header and the request context, and logs the request.
++// A client-supplied X-Request-Id is ignored to keep logs trustworthy.
++func requestLogger(next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		remoteIP := request.FindRemoteIP(r)
+-		isTrustedProxyClientIP := request.IsTrustedIP(remoteIP, config.Opts.TrustedReverseProxyNetworks())
+-		clientIP := request.FindClientIP(r, isTrustedProxyClientIP)
+-		ctx := r.Context()
+-		ctx = context.WithValue(ctx, request.ClientIPContextKey, clientIP)
++		requestID := crypto.GenerateRandomStringHex(8)
++		w.Header().Set("X-Request-Id", requestID)
+ 
+-		if isTrustedProxyClientIP && r.Header.Get("X-Forwarded-Proto") == "https" {
+-			config.Opts.SetHTTPSValue(true)
+-		}
++		r = r.WithContext(context.WithValue(r.Context(), request.RequestIDContextKey, requestID))
+ 
++		isTrustedProxyClientIP := request.IsTrustedIP(request.FindRemoteIP(r), config.Opts.TrustedReverseProxyNetworks())
++		clientIP := request.FindClientIP(r, isTrustedProxyClientIP)
++
++		recorder := &statusRecorder{ResponseWriter: w}
+ 		t1 := time.Now()
+ 		defer func() {
+-			slog.Debug("Incoming request",
++			status := recorder.status
++			if status == 0 {
++				status = http.StatusOK
++			}
++			slog.Info("Incoming request",
++				slog.String("request_id", requestID),
+ 				slog.String("client_ip", clientIP),
+ 				slog.Group("request",
+ 					slog.String("method", r.Method),
+ 					slog.String("uri", r.RequestURI),
+ 					slog.String("protocol", r.Proto),
++					slog.Int("status", status),
+ 					slog.Duration("execution_time", time.Since(t1)),
+ 				),
+ 			)
+ 		}()
+ 
++		next.ServeHTTP(recorder, r)
++	})
++}
++
++func middleware(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		remoteIP := request.FindRemoteIP(r)
++		isTrustedProxyClientIP := request.IsTrustedIP(remoteIP, config.Opts.TrustedReverseProxyNetworks())
++		clientIP := request.FindClientIP(r, isTrustedProxyClientIP)
++		ctx := r.Context()
++		ctx = context.WithValue(ctx, request.ClientIPContextKey, clientIP)
++
++		if isTrustedProxyClientIP && r.Header.Get("X-Forwarded-Proto") == "https" {
++			config.Opts.SetHTTPSValue(true)
++		}
++
+ 		if config.Opts.HTTPS() && config.Opts.HasHSTS() {
+ 			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+ 		}
+diff --git a/internal/http/server/routes.go b/internal/http/server/routes.go
+index 4ce7e43f..18e8f4a0 100644
+--- a/internal/http/server/routes.go
++++ b/internal/http/server/routes.go
+@@ -70,5 +70,5 @@ func newRouter(store *storage.Storage, pool *worker.Pool) http.Handler {
+ 		rootMux.Handle("/", appHandler)
+ 	}
+ 
+-	return rootMux
++	return requestLogger(rootMux)
+ }

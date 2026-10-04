@@ -1,0 +1,149 @@
+diff --git a/internal/storage/icon.go b/internal/storage/icon.go
+index 8c8dcef4..04a17198 100644
+--- a/internal/storage/icon.go
++++ b/internal/storage/icon.go
+@@ -54,7 +54,12 @@ func (s *Storage) IconByUserAndIconID(userID, iconID int64) (*model.Icon, error)
+ }
+ 
+ // IconByExternalID fetches an icon using its external identifier, returning nil when no match exists.
++// Found icons are served from an in-memory cache; the returned icon must not be modified.
+ func (s *Storage) IconByExternalID(externalIconID string) (*model.Icon, error) {
++	if icon, ok := s.iconsCache.get(externalIconID); ok {
++		return icon, nil
++	}
++
+ 	var icon model.Icon
+ 	query := `
+ 		SELECT
+@@ -73,6 +78,7 @@ func (s *Storage) IconByExternalID(externalIconID string) (*model.Icon, error) {
+ 	case err != nil:
+ 		return nil, fmt.Errorf("store: cannot load icon external_id=%s: %w", externalIconID, err)
+ 	default:
++		s.iconsCache.set(&icon)
+ 		return &icon, nil
+ 	}
+ }
+@@ -170,6 +176,8 @@ func (s *Storage) CleanupOrphanIcons() (int64, error) {
+ 		return 0, fmt.Errorf(`store: unable to clean orphan icons: %v`, err)
+ 	}
+ 
++	s.iconsCache.clear()
++
+ 	n, _ := result.RowsAffected()
+ 	return n, nil
+ }
+diff --git a/internal/storage/icon_cache.go b/internal/storage/icon_cache.go
+new file mode 100644
+index 00000000..aef2cee5
+--- /dev/null
++++ b/internal/storage/icon_cache.go
+@@ -0,0 +1,89 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package storage // import "miniflux.app/v2/internal/storage"
++
++import (
++	"sync"
++	"time"
++
++	"miniflux.app/v2/internal/model"
++)
++
++const (
++	iconCacheTTL      = 1 * time.Hour
++	iconCacheMaxBytes = 16 * 1024 * 1024
++)
++
++type iconCacheEntry struct {
++	icon      *model.Icon
++	expiresAt time.Time
++}
++
++// iconCache is an in-memory cache of icons keyed by external ID.
++//
++// An icon row is immutable once created (its content is addressed by hash),
++// so entries never need invalidation except when the row is deleted, which
++// only happens in CleanupOrphanIcons. Cached icons must be treated as read-only.
++type iconCache struct {
++	mu      sync.Mutex
++	entries map[string]iconCacheEntry
++	size    int
++}
++
++func newIconCache() *iconCache {
++	return &iconCache{entries: make(map[string]iconCacheEntry)}
++}
++
++func (c *iconCache) get(externalID string) (*model.Icon, bool) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	entry, ok := c.entries[externalID]
++	if !ok {
++		return nil, false
++	}
++	if time.Now().After(entry.expiresAt) {
++		c.remove(externalID)
++		return nil, false
++	}
++	return entry.icon, true
++}
++
++func (c *iconCache) set(icon *model.Icon) {
++	cost := len(icon.Content)
++	if cost > iconCacheMaxBytes {
++		return
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	c.remove(icon.ExternalID)
++	// Evict arbitrary entries until the new icon fits.
++	for key := range c.entries {
++		if c.size+cost <= iconCacheMaxBytes {
++			break
++		}
++		c.remove(key)
++	}
++
++	c.entries[icon.ExternalID] = iconCacheEntry{icon: icon, expiresAt: time.Now().Add(iconCacheTTL)}
++	c.size += cost
++}
++
++func (c *iconCache) clear() {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	c.entries = make(map[string]iconCacheEntry)
++	c.size = 0
++}
++
++// remove must be called with c.mu held.
++func (c *iconCache) remove(externalID string) {
++	if entry, ok := c.entries[externalID]; ok {
++		c.size -= len(entry.icon.Content)
++		delete(c.entries, externalID)
++	}
++}
+diff --git a/internal/storage/storage.go b/internal/storage/storage.go
+index ffae9692..346830df 100644
+--- a/internal/storage/storage.go
++++ b/internal/storage/storage.go
+@@ -11,12 +11,13 @@ import (
+ 
+ // Storage handles all operations related to the database.
+ type Storage struct {
+-	db *sql.DB
++	db         *sql.DB
++	iconsCache *iconCache
+ }
+ 
+ // NewStorage returns a new Storage.
+ func NewStorage(db *sql.DB) *Storage {
+-	return &Storage{db}
++	return &Storage{db: db, iconsCache: newIconCache()}
+ }
+ 
+ // DatabaseVersion returns the version of the database which is in use.

@@ -1,0 +1,62 @@
+diff --git a/internal/reader/opml/parser_test.go b/internal/reader/opml/parser_test.go
+index 271b3755..fb68a7fc 100644
+--- a/internal/reader/opml/parser_test.go
++++ b/internal/reader/opml/parser_test.go
+@@ -276,6 +276,57 @@ func TestParseInvalidXML(t *testing.T) {
+ 	}
+ }
+ 
++func TestParseMalformedOpml(t *testing.T) {
++	tests := []struct {
++		name string
++		data string
++	}{
++		{"empty input", ``},
++		{"whitespace only", " \n\t "},
++		{"wrong root element", `<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>`},
++		{"truncated before body", `<?xml version="1.0"?><opml version="2.0"><head><title>x</title>`},
++		{"truncated inside outline", `<?xml version="1.0"?><opml version="2.0"><body><outline type="rss" xmlUrl="http://example.org/feed"`},
++		{"invalid miniflux boolean", `<?xml version="1.0"?>
++			<opml version="2.0" xmlns:miniflux="https://miniflux.app/opml">
++				<body><outline type="rss" xmlUrl="http://example.org/feed" miniflux:crawler="maybe"/></body>
++			</opml>`},
++	}
++
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			subscriptions, err := parse(bytes.NewBufferString(tc.data))
++			if err == nil {
++				t.Fatalf("Parse should generate an error, got %d subscriptions", len(subscriptions))
++			}
++			if subscriptions != nil {
++				t.Errorf("Subscriptions should be nil on error, got %v", subscriptions)
++			}
++		})
++	}
++}
++
++func TestParseOpmlWithoutSubscriptions(t *testing.T) {
++	tests := []struct {
++		name string
++		data string
++	}{
++		{"empty body", `<?xml version="1.0"?><opml version="2.0"><body></body></opml>`},
++		{"outline without feed URL", `<?xml version="1.0"?><opml version="2.0"><body><outline text="Empty"></outline></body></opml>`},
++	}
++
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			subscriptions, err := parse(bytes.NewBufferString(tc.data))
++			if err != nil {
++				t.Fatal(err)
++			}
++			if len(subscriptions) != 0 {
++				t.Errorf("Wrong number of subscriptions: %d instead of 0", len(subscriptions))
++			}
++		})
++	}
++}
++
+ func TestParseOpmlWithMinifluxSettings(t *testing.T) {
+ 	data := `<?xml version="1.0" encoding="utf-8"?>
+ 	<opml version="2.0" xmlns:miniflux="https://miniflux.app/opml">

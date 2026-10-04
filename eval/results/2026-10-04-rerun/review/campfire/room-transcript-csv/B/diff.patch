@@ -1,0 +1,123 @@
+diff --git a/app/controllers/rooms/transcripts_controller.rb b/app/controllers/rooms/transcripts_controller.rb
+new file mode 100644
+index 0000000..7a7a028
+--- /dev/null
++++ b/app/controllers/rooms/transcripts_controller.rb
+@@ -0,0 +1,9 @@
++class Rooms::TranscriptsController < ApplicationController
++  include RoomScoped
++
++  def show
++    send_data Room::Transcript.new(@room).to_csv,
++      filename: "#{@room.name.to_s.parameterize.presence || "room"}-messages.csv",
++      type: "text/csv; charset=utf-8"
++  end
++end
+diff --git a/app/models/room/transcript.rb b/app/models/room/transcript.rb
+new file mode 100644
+index 0000000..0a05217
+--- /dev/null
++++ b/app/models/room/transcript.rb
+@@ -0,0 +1,29 @@
++# Renders a room's messages as CSV. Written by hand rather than with the csv gem,
++# which is no longer a default gem as of Ruby 3.4.
++class Room::Transcript
++  HEADERS = %w[ id created_at author message ]
++  FORMULA_PREFIXES = %w[ = + - @ ] + [ "\t", "\r" ]
++
++  def initialize(room)
++    @room = room
++  end
++
++  def to_csv
++    rows = [ HEADERS ]
++
++    @room.messages.with_creator.with_rich_text_body_and_embeds.with_attached_attachment.find_each do |message|
++      rows << [ message.id, message.created_at.utc.iso8601, message.creator.name, message.plain_text_body ]
++    end
++
++    rows.map { |row| row.map { |cell| escape(cell) }.join(",") }.join("\r\n") + "\r\n"
++  end
++
++  private
++    # Spreadsheets run cells that start with these characters as formulas, and
++    # message bodies are user-supplied, so neutralize them with a leading quote.
++    def escape(value)
++      value = value.to_s
++      value = "'#{value}" if value.start_with?(*FORMULA_PREFIXES)
++      value.match?(/[",\r\n]/) ? %("#{value.gsub('"', '""')}") : value
++    end
++end
+diff --git a/app/views/rooms/layouts/_edit.html.erb b/app/views/rooms/layouts/_edit.html.erb
+index 403c477..ccf41ae 100644
+--- a/app/views/rooms/layouts/_edit.html.erb
++++ b/app/views/rooms/layouts/_edit.html.erb
+@@ -10,6 +10,10 @@
+   <%= yield %>
+ </section>
+ 
++<section class="panel txt-align-center">
++  <%= link_to "Download messages (CSV)", room_transcript_path(room, format: :csv), class: "btn max-width", data: { turbo: false } %>
++</section>
++
+ <% if Current.user.can_administer?(@room) %>
+   <section class="panel txt-align-center">
+     <%= button_to_delete_room room %>
+diff --git a/config/routes.rb b/config/routes.rb
+index cb9dd1a..8f44423 100644
+--- a/config/routes.rb
++++ b/config/routes.rb
+@@ -73,6 +73,7 @@ Rails.application.routes.draw do
+     scope module: "rooms" do
+       resource :refresh, only: :show
+       resource :settings, only: :show
++      resource :transcript, only: :show
+       resource :involvement, only: %i[ show update ]
+     end
+ 
+diff --git a/test/controllers/rooms/transcripts_controller_test.rb b/test/controllers/rooms/transcripts_controller_test.rb
+new file mode 100644
+index 0000000..3116e72
+--- /dev/null
++++ b/test/controllers/rooms/transcripts_controller_test.rb
+@@ -0,0 +1,40 @@
++require "test_helper"
++
++class Rooms::TranscriptsControllerTest < ActionDispatch::IntegrationTest
++  setup do
++    sign_in :david
++  end
++
++  test "downloads the room's messages as CSV" do
++    room = rooms(:hq)
++    room.messages.create!(creator: users(:jason), body: "Hello, \"world\"", client_message_id: "csv-1")
++
++    get room_transcript_url(room, format: :csv)
++
++    assert_response :success
++    assert_equal "text/csv; charset=utf-8", response.content_type
++    assert_match "attachment", response.headers["Content-Disposition"]
++
++    lines = response.body.split("\r\n")
++    assert_equal "id,created_at,author,message", lines.first
++    assert_includes response.body, %("Hello, ""world""")
++  end
++
++  test "neutralizes spreadsheet formulas" do
++    room = rooms(:hq)
++    room.messages.create!(creator: users(:jason), body: "=HYPERLINK(\"http://evil\")", client_message_id: "csv-2")
++
++    get room_transcript_url(room, format: :csv)
++
++    assert_includes response.body, %("'=HYPERLINK(""http://evil"")")
++  end
++
++  test "non-members can't download" do
++    room = rooms(:hq)
++    room.memberships.where(user: users(:david)).destroy_all
++
++    get room_transcript_url(room, format: :csv)
++
++    assert_response :not_found
++  end
++end

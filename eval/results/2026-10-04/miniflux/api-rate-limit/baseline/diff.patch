@@ -1,0 +1,346 @@
+diff --git a/internal/api/middleware.go b/internal/api/middleware.go
+index d05aa2ff..a12e1212 100644
+--- a/internal/api/middleware.go
++++ b/internal/api/middleware.go
+@@ -15,12 +15,14 @@ import (
+ )
+ 
+ type middleware struct {
+-	store *storage.Storage
++	store       *storage.Storage
++	rateLimiter *rateLimiter
+ }
+ 
+ func newMiddleware(s *storage.Storage) *middleware {
+-	return &middleware{s}
++	return &middleware{store: s, rateLimiter: newRateLimiter()}
+ }
++
+ func (m *middleware) withCORSHeaders(next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		w.Header().Set("Access-Control-Allow-Origin", "*")
+@@ -67,6 +69,17 @@ func (m *middleware) validateAPIKeyAuth(next http.Handler) http.Handler {
+ 			return
+ 		}
+ 
++		if allowed, retryAfter := m.rateLimiter.allow(token, config.Opts.APIRateLimit()); !allowed {
++			slog.Warn("[API] Rate limit exceeded for API key",
++				slog.String("client_ip", clientIP),
++				slog.String("user_agent", r.UserAgent()),
++				slog.String("username", user.Username),
++				slog.String("request_uri", r.RequestURI),
++			)
++			response.JSONTooManyRequests(w, r, retryAfter)
++			return
++		}
++
+ 		slog.Info("[API] User authenticated successfully with the API Token Authentication",
+ 			slog.Bool("authentication_successful", true),
+ 			slog.String("client_ip", clientIP),
+diff --git a/internal/api/rate_limiter.go b/internal/api/rate_limiter.go
+new file mode 100644
+index 00000000..e82521bb
+--- /dev/null
++++ b/internal/api/rate_limiter.go
+@@ -0,0 +1,84 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package api // import "miniflux.app/v2/internal/api"
++
++import (
++	"sync"
++	"time"
++)
++
++const rateLimiterCleanupInterval = time.Minute
++
++type tokenBucket struct {
++	tokens float64
++	last   time.Time
++}
++
++// rateLimiter is a token bucket rate limiter keyed by API key.
++// Each key can burst up to the configured limit and refills at limit/minute.
++type rateLimiter struct {
++	mu          sync.Mutex
++	buckets     map[string]*tokenBucket
++	lastCleanup time.Time
++	now         func() time.Time
++}
++
++func newRateLimiter() *rateLimiter {
++	return &rateLimiter{
++		buckets: make(map[string]*tokenBucket),
++		now:     time.Now,
++	}
++}
++
++// allow consumes one token for the key. When the key is over the limit,
++// it returns false and how long to wait before the next token is available.
++// A limit of zero or less disables rate limiting.
++func (l *rateLimiter) allow(key string, limitPerMinute int) (bool, time.Duration) {
++	if limitPerMinute <= 0 {
++		return true, 0
++	}
++
++	l.mu.Lock()
++	defer l.mu.Unlock()
++
++	now := l.now()
++	l.cleanup(now)
++
++	capacity := float64(limitPerMinute)
++	refillPerSecond := capacity / 60
++
++	bucket, ok := l.buckets[key]
++	if !ok {
++		bucket = &tokenBucket{tokens: capacity, last: now}
++		l.buckets[key] = bucket
++	} else {
++		elapsed := now.Sub(bucket.last).Seconds()
++		bucket.tokens = min(capacity, bucket.tokens+elapsed*refillPerSecond)
++		bucket.last = now
++	}
++
++	if bucket.tokens < 1 {
++		missing := 1 - bucket.tokens
++		return false, time.Duration(missing / refillPerSecond * float64(time.Second))
++	}
++
++	bucket.tokens--
++	return true, 0
++}
++
++// cleanup drops buckets that have been idle long enough to be full again
++// (a bucket always refills in one minute), so memory stays bounded by the
++// number of recently active keys.
++func (l *rateLimiter) cleanup(now time.Time) {
++	if now.Sub(l.lastCleanup) < rateLimiterCleanupInterval {
++		return
++	}
++	l.lastCleanup = now
++
++	for key, bucket := range l.buckets {
++		if now.Sub(bucket.last) >= time.Minute {
++			delete(l.buckets, key)
++		}
++	}
++}
+diff --git a/internal/api/rate_limiter_test.go b/internal/api/rate_limiter_test.go
+new file mode 100644
+index 00000000..eee0aea8
+--- /dev/null
++++ b/internal/api/rate_limiter_test.go
+@@ -0,0 +1,86 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package api // import "miniflux.app/v2/internal/api"
++
++import (
++	"testing"
++	"time"
++)
++
++func newTestRateLimiter() (*rateLimiter, *time.Time) {
++	now := time.Unix(1_000_000, 0)
++	l := newRateLimiter()
++	l.now = func() time.Time { return now }
++	return l, &now
++}
++
++func TestRateLimiterDisabledWhenLimitIsZero(t *testing.T) {
++	l, _ := newTestRateLimiter()
++	for range 1000 {
++		if ok, _ := l.allow("key", 0); !ok {
++			t.Fatal("expected requests to be allowed when rate limiting is disabled")
++		}
++	}
++}
++
++func TestRateLimiterRejectsAfterBurst(t *testing.T) {
++	l, _ := newTestRateLimiter()
++	for i := range 3 {
++		if ok, _ := l.allow("key", 3); !ok {
++			t.Fatalf("request %d should be allowed", i+1)
++		}
++	}
++
++	ok, retryAfter := l.allow("key", 3)
++	if ok {
++		t.Fatal("expected the fourth request to be rejected")
++	}
++	if retryAfter != 20*time.Second {
++		t.Fatalf("expected retry after 20s, got %s", retryAfter)
++	}
++}
++
++func TestRateLimiterRefillsOverTime(t *testing.T) {
++	l, now := newTestRateLimiter()
++	for range 60 {
++		l.allow("key", 60)
++	}
++	if ok, _ := l.allow("key", 60); ok {
++		t.Fatal("expected rejection once the bucket is empty")
++	}
++
++	*now = now.Add(time.Second)
++	if ok, _ := l.allow("key", 60); !ok {
++		t.Fatal("expected one token to be refilled after one second")
++	}
++	if ok, _ := l.allow("key", 60); ok {
++		t.Fatal("expected only one token to be refilled")
++	}
++}
++
++func TestRateLimiterIsPerKey(t *testing.T) {
++	l, _ := newTestRateLimiter()
++	if ok, _ := l.allow("a", 1); !ok {
++		t.Fatal("first key should be allowed")
++	}
++	if ok, _ := l.allow("a", 1); ok {
++		t.Fatal("first key should be limited")
++	}
++	if ok, _ := l.allow("b", 1); !ok {
++		t.Fatal("second key should not be affected by the first")
++	}
++}
++
++func TestRateLimiterCleansUpIdleBuckets(t *testing.T) {
++	l, now := newTestRateLimiter()
++	l.allow("a", 10)
++	l.allow("b", 10)
++
++	*now = now.Add(2 * time.Minute)
++	l.allow("c", 10)
++
++	if len(l.buckets) != 1 {
++		t.Fatalf("expected idle buckets to be removed, got %d", len(l.buckets))
++	}
++}
+diff --git a/internal/config/options.go b/internal/config/options.go
+index c12a5caa..f939972e 100644
+--- a/internal/config/options.go
++++ b/internal/config/options.go
+@@ -90,6 +90,14 @@ func NewConfigOptions() *configOptions {
+ 				valueType:         secretFileType,
+ 				targetKey:         "ADMIN_USERNAME",
+ 			},
++			"API_RATE_LIMIT": {
++				parsedIntValue: 0,
++				rawValue:       "0",
++				valueType:      intType,
++				validator: func(rawValue string) error {
++					return validateGreaterOrEqualThan(rawValue, 0)
++				},
++			},
+ 			"AUTH_PROXY_HEADER": {
+ 				parsedStringValue: "",
+ 				rawValue:          "",
+@@ -640,6 +648,10 @@ func (c *configOptions) BasePath() string {
+ 	return c.basePath
+ }
+ 
++func (c *configOptions) APIRateLimit() int {
++	return c.options["API_RATE_LIMIT"].parsedIntValue
++}
++
+ func (c *configOptions) BaseURL() string {
+ 	return c.options["BASE_URL"].parsedStringValue
+ }
+diff --git a/internal/config/options_parsing_test.go b/internal/config/options_parsing_test.go
+index cd5a8468..097b2328 100644
+--- a/internal/config/options_parsing_test.go
++++ b/internal/config/options_parsing_test.go
+@@ -1042,6 +1042,26 @@ func TestOAuth2UserCreationOptionParsing(t *testing.T) {
+ 	}
+ }
+ 
++func TestAPIRateLimitOptionParsing(t *testing.T) {
++	configParser := NewConfigParser()
++
++	if configParser.options.APIRateLimit() != 0 {
++		t.Fatalf("Expected API_RATE_LIMIT to be 0 by default")
++	}
++
++	if err := configParser.parseLines([]string{"API_RATE_LIMIT=120"}); err != nil {
++		t.Fatalf("Unexpected error: %v", err)
++	}
++
++	if configParser.options.APIRateLimit() != 120 {
++		t.Fatalf("Expected API_RATE_LIMIT to be 120")
++	}
++
++	if err := configParser.parseLines([]string{"API_RATE_LIMIT=-1"}); err == nil {
++		t.Fatalf("Expected an error for a negative API_RATE_LIMIT")
++	}
++}
++
+ func TestPollingLimitPerHostOptionParsing(t *testing.T) {
+ 	configParser := NewConfigParser()
+ 
+diff --git a/internal/http/response/json.go b/internal/http/response/json.go
+index aa085364..92dd9aa0 100644
+--- a/internal/http/response/json.go
++++ b/internal/http/response/json.go
+@@ -7,7 +7,10 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"log/slog"
++	"math"
+ 	"net/http"
++	"strconv"
++	"time"
+ 
+ 	"miniflux.app/v2/internal/http/request"
+ )
+@@ -137,6 +140,28 @@ func JSONForbidden(w http.ResponseWriter, r *http.Request) {
+ 		Write()
+ }
+ 
++// JSONTooManyRequests sends a rate limit error to the client.
++func JSONTooManyRequests(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
++	slog.Warn(http.StatusText(http.StatusTooManyRequests),
++		slog.String("client_ip", request.ClientIP(r)),
++		slog.Group("request",
++			slog.String("method", r.Method),
++			slog.String("uri", r.RequestURI),
++			slog.String("user_agent", r.UserAgent()),
++		),
++		slog.Group("response",
++			slog.Int("status_code", http.StatusTooManyRequests),
++		),
++	)
++
++	NewBuilder(w, r).
++		WithStatus(http.StatusTooManyRequests).
++		WithHeader("Content-Type", jsonContentTypeHeader).
++		WithHeader("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds())))).
++		WithBodyAsBytes(generateJSONError(errors.New("too many requests"))).
++		Write()
++}
++
+ // JSONNotFound sends a page not found error to the client.
+ func JSONNotFound(w http.ResponseWriter, r *http.Request) {
+ 	slog.Warn(http.StatusText(http.StatusNotFound),
+diff --git a/miniflux.1 b/miniflux.1
+index b9cb1c14..e25aeacf 100644
+--- a/miniflux.1
++++ b/miniflux.1
+@@ -159,6 +159,15 @@ Path to a secret key exposed as a file, it should contain the
+ .br
+ Default is empty\&.
+ .TP
++.B API_RATE_LIMIT
++Maximum number of API requests per minute allowed for each API key\&.
++.br
++Requests above the limit receive a 429 response with a Retry\-After header\&.
++.br
++Only requests authenticated with an API key (X\-Auth\-Token) are limited\&.
++.br
++Default is 0 (disabled)\&.
++.TP
+ .B AUTH_PROXY_HEADER
+ Proxy authentication HTTP header\&.
+ .br

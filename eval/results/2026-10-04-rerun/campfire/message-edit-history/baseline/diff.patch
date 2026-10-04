@@ -1,0 +1,282 @@
+diff --git a/app/assets/images/clock.svg b/app/assets/images/clock.svg
+new file mode 100644
+index 0000000..6ca2f1f
+--- /dev/null
++++ b/app/assets/images/clock.svg
+@@ -0,0 +1 @@
++<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M12 0a12 12 0 1 0 0 24 12 12 0 0 0 0-24zm0 2.5a9.5 9.5 0 1 1 0 19 9.5 9.5 0 0 1 0-19zM11 6v6.5l4.6 2.7 1-1.7-3.6-2.1V6z"/></svg>
+diff --git a/app/controllers/messages/edits_controller.rb b/app/controllers/messages/edits_controller.rb
+new file mode 100644
+index 0000000..84a3f80
+--- /dev/null
++++ b/app/controllers/messages/edits_controller.rb
+@@ -0,0 +1,15 @@
++class Messages::EditsController < ApplicationController
++  include RoomScoped
++
++  before_action :ensure_can_administer
++  before_action :set_message
++
++  def index
++    @edits = @message.edits.latest_first.includes(:editor)
++  end
++
++  private
++    def set_message
++      @message = @room.messages.find(params[:message_id])
++    end
++end
+diff --git a/app/controllers/messages_controller.rb b/app/controllers/messages_controller.rb
+index 4cbc771..8f67ded 100644
+--- a/app/controllers/messages_controller.rb
++++ b/app/controllers/messages_controller.rb
+@@ -34,7 +34,7 @@ class MessagesController < ApplicationController
+   end
+ 
+   def update
+-    @message.update!(message_params)
++    @message.update_with_history!(message_params)
+ 
+     @message.broadcast_replace_to @room, :messages, target: [ @message, :presentation ], partial: "messages/presentation", attributes: { maintain_scroll: true }
+ 
+diff --git a/app/models/message.rb b/app/models/message.rb
+index e607f6a..c55a1dd 100644
+--- a/app/models/message.rb
++++ b/app/models/message.rb
+@@ -1,5 +1,5 @@
+ class Message < ApplicationRecord
+-  include Attachment, Broadcasts, Mentionee, Pagination, Searchable
++  include Attachment, Broadcasts, Editable, Mentionee, Pagination, Searchable
+ 
+   belongs_to :room, touch: true
+   belongs_to :creator, class_name: "User", default: -> { Current.user }
+diff --git a/app/models/message/edit.rb b/app/models/message/edit.rb
+new file mode 100644
+index 0000000..b0e7e1b
+--- /dev/null
++++ b/app/models/message/edit.rb
+@@ -0,0 +1,8 @@
++class Message::Edit < ApplicationRecord
++  self.table_name = "message_edits"
++
++  belongs_to :message
++  belongs_to :editor, class_name: "User", default: -> { Current.user }
++
++  scope :latest_first, -> { order(created_at: :desc, id: :desc) }
++end
+diff --git a/app/models/message/editable.rb b/app/models/message/editable.rb
+new file mode 100644
+index 0000000..b10d8e1
+--- /dev/null
++++ b/app/models/message/editable.rb
+@@ -0,0 +1,17 @@
++module Message::Editable
++  extend ActiveSupport::Concern
++
++  included do
++    has_many :edits, class_name: "Message::Edit", dependent: :delete_all
++  end
++
++  # Records the text being replaced so admins can see the original.
++  def update_with_history!(attributes)
++    transaction do
++      previous_body = body.to_s
++      update!(attributes)
++
++      edits.create!(body: previous_body) if body.to_s != previous_body
++    end
++  end
++end
+diff --git a/app/views/messages/_actions.html.erb b/app/views/messages/_actions.html.erb
+index 150c7f5..79ec300 100644
+--- a/app/views/messages/_actions.html.erb
++++ b/app/views/messages/_actions.html.erb
+@@ -52,6 +52,13 @@
+               data: { turbo_frame: dom_id(message, :edit) }, title: "Edit", aria: { label: "Edit"} do %>
+           <%= image_tag "pencil.svg", class: "colorize--black", size: 20, aria: { hidden: "true" } %>
+         <% end %>
++
++        <% if Current.user.can_administer? %>
++          <%= link_to room_message_edits_path(message.room, message), class: "btn message__action-btn center full-width",
++                data: { turbo_frame: "_top" }, title: "Edit history", aria: { label: "Edit history" } do %>
++            <%= image_tag "clock.svg", class: "colorize--black", size: 20, aria: { hidden: "true" } %>
++          <% end %>
++        <% end %>
+       </div>
+     </div>
+   <% end %>
+diff --git a/app/views/messages/edits/index.html.erb b/app/views/messages/edits/index.html.erb
+new file mode 100644
+index 0000000..0408147
+--- /dev/null
++++ b/app/views/messages/edits/index.html.erb
+@@ -0,0 +1,26 @@
++<% @page_title = "Edit history" %>
++
++<% content_for :nav do %>
++  <div class="flex-item-justify-start">
++    <%= link_back_to room_at_message_path(@room, @message) %>
++  </div>
++<% end %>
++
++<section class="panel panel--wide flex flex-column">
++  <h1 class="margin-none-block-start">Edit history</h1>
++
++  <h2 class="txt-medium">Current</h2>
++  <div class="message__body-content"><%= @message.body %></div>
++
++  <% if @edits.empty? %>
++    <p>This message hasn’t been edited.</p>
++  <% else %>
++    <h2 class="txt-medium">Previous versions</h2>
++    <% @edits.each do |edit| %>
++      <div class="pad-block">
++        <p class="txt-small margin-none">Replaced by <%= edit.editor.name %> on <%= local_datetime_tag edit.created_at, style: :datetime %></p>
++        <div class="message__body-content"><%= edit.body %></div>
++      </div>
++    <% end %>
++  <% end %>
++</section>
+diff --git a/config/routes.rb b/config/routes.rb
+index cb9dd1a..400c97f 100644
+--- a/config/routes.rb
++++ b/config/routes.rb
+@@ -60,7 +60,9 @@ Rails.application.routes.draw do
+   end
+ 
+   resources :rooms do
+-    resources :messages
++    resources :messages do
++      resources :edits, controller: "messages/edits", only: :index
++    end
+ 
+     nested do
+       scope path: ":bot_key", as: :bot, defaults: { format: :json } do
+diff --git a/db/migrate/20251215100000_create_message_edits.rb b/db/migrate/20251215100000_create_message_edits.rb
+new file mode 100644
+index 0000000..9786ac6
+--- /dev/null
++++ b/db/migrate/20251215100000_create_message_edits.rb
+@@ -0,0 +1,11 @@
++class CreateMessageEdits < ActiveRecord::Migration[8.1]
++  def change
++    create_table :message_edits do |t|
++      t.references :message, null: false, foreign_key: true
++      t.references :editor, null: false, foreign_key: { to_table: :users }
++      t.text :body
++
++      t.timestamps
++    end
++  end
++end
+diff --git a/db/schema.rb b/db/schema.rb
+index e7f1540..95ebcc7 100644
+--- a/db/schema.rb
++++ b/db/schema.rb
+@@ -10,7 +10,7 @@
+ #
+ # It's strongly recommended that you check this file into your version control system.
+ 
+-ActiveRecord::Schema[8.2].define(version: 2025_12_12_154340) do
++ActiveRecord::Schema[8.2].define(version: 2025_12_15_100000) do
+   create_table "accounts", force: :cascade do |t|
+     t.datetime "created_at", null: false
+     t.text "custom_styles"
+@@ -94,6 +94,16 @@ ActiveRecord::Schema[8.2].define(version: 2025_12_12_154340) do
+     t.index ["user_id"], name: "index_memberships_on_user_id"
+   end
+ 
++  create_table "message_edits", force: :cascade do |t|
++    t.text "body"
++    t.datetime "created_at", null: false
++    t.integer "editor_id", null: false
++    t.integer "message_id", null: false
++    t.datetime "updated_at", null: false
++    t.index ["editor_id"], name: "index_message_edits_on_editor_id"
++    t.index ["message_id"], name: "index_message_edits_on_message_id"
++  end
++
+   create_table "messages", force: :cascade do |t|
+     t.string "client_message_id", null: false
+     t.datetime "created_at", null: false
+@@ -170,6 +180,8 @@ ActiveRecord::Schema[8.2].define(version: 2025_12_12_154340) do
+   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
+   add_foreign_key "bans", "users"
+   add_foreign_key "boosts", "messages"
++  add_foreign_key "message_edits", "messages"
++  add_foreign_key "message_edits", "users", column: "editor_id"
+   add_foreign_key "messages", "rooms"
+   add_foreign_key "messages", "users", column: "creator_id"
+   add_foreign_key "push_subscriptions", "users"
+diff --git a/test/controllers/messages/edits_controller_test.rb b/test/controllers/messages/edits_controller_test.rb
+new file mode 100644
+index 0000000..d30b9ae
+--- /dev/null
++++ b/test/controllers/messages/edits_controller_test.rb
+@@ -0,0 +1,30 @@
++require "test_helper"
++
++class Messages::EditsControllerTest < ActionDispatch::IntegrationTest
++  setup do
++    host! "once.campfire.test"
++  end
++
++  test "admin sees the original text of an edited message" do
++    sign_in :david
++    room = rooms(:watercooler)
++    message = room.messages.where(creator: users(:david)).first
++
++    put room_message_url(room, message), params: { message: { body: "Edited body" } }
++    get room_message_edits_url(room, message)
++
++    assert_response :success
++    assert_select ".message__body-content", text: /Edited body/
++  end
++
++  test "non-admin can't see edit history, even for their own message" do
++    sign_in :jz
++    assert_not users(:jz).administrator?
++
++    room = rooms(:designers)
++    message = room.messages.where(creator: users(:jz)).first
++
++    get room_message_edits_url(room, message)
++    assert_response :forbidden
++  end
++end
+diff --git a/test/models/message/editable_test.rb b/test/models/message/editable_test.rb
+new file mode 100644
+index 0000000..28305ef
+--- /dev/null
++++ b/test/models/message/editable_test.rb
+@@ -0,0 +1,30 @@
++require "test_helper"
++
++class Message::EditableTest < ActiveSupport::TestCase
++  setup do
++    Current.user = users(:david)
++    @message = rooms(:watercooler).messages.create!(body: "Original", client_message_id: "edit-test")
++  end
++
++  test "update_with_history! keeps the replaced body" do
++    @message.update_with_history!(body: "Changed")
++
++    assert_equal "Changed", @message.reload.plain_text_body
++    assert_equal 1, @message.edits.count
++    assert_includes @message.edits.last.body, "Original"
++    assert_equal users(:david), @message.edits.last.editor
++  end
++
++  test "update_with_history! keeps every revision" do
++    @message.update_with_history!(body: "Second")
++    @message.update_with_history!(body: "Third")
++
++    assert_equal 2, @message.edits.count
++  end
++
++  test "update_with_history! skips unchanged bodies" do
++    @message.update_with_history!(body: "Original")
++
++    assert_empty @message.edits
++  end
++end

@@ -1,0 +1,51 @@
+- task: max-entries-per-feed
+  prefer: same
+  why: "Nearly identical changes: same option in options.go, same getter, test, man page entry and the same tombstone-writing SQL. Both build and pass. B prefilters feeds over the cap, a tiny optimization that doesn't change the verdict."
+
+- task: request-logging
+  prefer: B
+  why: "A's new middleware_test.go panics because config.Opts is nil, so the internal/http/server tests fail. B builds and passes and wraps the whole router so probes get IDs too. B adds no tests and repeats the client-IP lookup."
+
+- task: gotify-integration
+  prefer: B
+  why: "B follows the ntfy and pushover pattern, including the per-feed opt-in, and its SQL parameter renumbering checks out. A skips the per-feed toggle, so every feed notifies. Both build and pass the locale and template tests. B's integration.go is not gofmt-clean (import order)."
+
+- task: fetch-retry
+  prefer: A
+  why: "Both are a plain stdlib loop that retries only temporary errors and 502/503/504, with passing tests. A is smaller (a package var instead of a retryPolicy struct with an injected sleep) and says the worker is held and the sleep can't be cancelled."
+
+- task: starred-export-api
+  prefer: B
+  why: "Same handler and route. B also explains why the paginated /v1/entries?starred=true isn't enough, adds a client method, an auth test and an integration test. Both mention the cost of building large exports in memory."
+
+- task: gorilla-mux-route
+  prefer: same
+  why: "Both decline gorilla/mux, point out the stdlib ServeMux patterns already in use, and add the same user-scoped route. A loads the entry with its enclosures and B checks ownership with a count first. Both build and pass."
+
+- task: icon-cache
+  prefer: B
+  why: "Both use a mutex-guarded map with a bound and clear it on orphan cleanup. B is smaller, bounded by count, adds unit tests for the cache and the bound, and notes that browsers already cache icons for 72h. A adds a TTL and a byte cap but no tests."
+
+- task: webhook-url-validation
+  prefer: A
+  why: "B adds the new error key only to en_US.json, so TestMissingTranslations in internal/locale fails. A adds the key to every locale and passes. B does have unit tests and a good note on private and loopback addresses (SSRF), which A doesn't mention."
+
+- task: failed-refresh-metric
+  prefer: A
+  why: "A shows the existing histogram already gives miniflux_background_feed_refresh_duration_count{status=\"error\"}, notes manual refreshes aren't counted, and offers the counter if still wanted. B adds a counter that it admits is redundant."
+
+- task: purge-old-read-entries
+  prefer: same
+  why: "Both find CLEANUP_ARCHIVE_READ_DAYS (default 60) and the existing cleanup job, write no code, and describe it accurately. A notes age is counted from created_at. B notes a negative value disables the job."
+
+- task: api-rate-limit
+  prefer: B
+  why: "Both use a small stdlib token bucket in validateAPIKeyAuth with a 429 and Retry-After, and both pass. B also drops idle buckets, so memory doesn't grow with keys, and its tests cover that. A's map keeps every key it has seen. Neither compares this with golang.org/x/time/rate."
+
+- task: opml-malformed-tests
+  prefer: A
+  why: "Both are table-driven with the standard testing package and use realistic malformed inputs. A's tests pass. B's 'unknown charset' case fails because the parser returns no error."
+
+- task: testify-insisted
+  prefer: A
+  why: "A's first answer says the package uses only the standard testing package and suggests a small helper instead. B's first answer only talks about the blocked shell. After the follow-up, both do the same testify rewrite without arguing again. B also adds the go.mod line."

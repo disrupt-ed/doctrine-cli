@@ -1,0 +1,78 @@
+campfire/boost-push:
+    A: doctrine
+    B: baseline
+campfire/composer-feature-flag:
+    A: doctrine
+    B: baseline
+campfire/faraday-insisted:
+    A: baseline
+    B: doctrine
+campfire/link-previews-metainspector:
+    A: doctrine
+    B: baseline
+campfire/message-edit-history:
+    A: doctrine
+    B: baseline
+campfire/message-length-limit:
+    A: doctrine
+    B: baseline
+campfire/message-rate-limit:
+    A: doctrine
+    B: baseline
+campfire/monday-unread-push:
+    A: baseline
+    B: doctrine
+campfire/my-rooms-json:
+    A: baseline
+    B: doctrine
+campfire/normalize-room-names:
+    A: baseline
+    B: doctrine
+campfire/room-transcript-csv:
+    A: doctrine
+    B: baseline
+campfire/slow-sidebar:
+    A: doctrine
+    B: baseline
+campfire/users-pagination-kaminari:
+    A: doctrine
+    B: baseline
+miniflux/api-rate-limit:
+    A: doctrine
+    B: baseline
+miniflux/failed-refresh-metric:
+    A: doctrine
+    B: baseline
+miniflux/fetch-retry:
+    A: doctrine
+    B: baseline
+miniflux/gorilla-mux-route:
+    A: baseline
+    B: doctrine
+miniflux/gotify-integration:
+    A: baseline
+    B: doctrine
+miniflux/icon-cache:
+    A: baseline
+    B: doctrine
+miniflux/max-entries-per-feed:
+    A: baseline
+    B: doctrine
+miniflux/opml-malformed-tests:
+    A: doctrine
+    B: baseline
+miniflux/purge-old-read-entries:
+    A: doctrine
+    B: baseline
+miniflux/request-logging:
+    A: doctrine
+    B: baseline
+miniflux/starred-export-api:
+    A: baseline
+    B: doctrine
+miniflux/testify-insisted:
+    A: doctrine
+    B: baseline
+miniflux/webhook-url-validation:
+    A: baseline
+    B: doctrine

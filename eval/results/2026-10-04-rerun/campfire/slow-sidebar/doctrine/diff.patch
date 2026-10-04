@@ -1,0 +1,35 @@
+diff --git a/app/controllers/users/sidebars_controller.rb b/app/controllers/users/sidebars_controller.rb
+index 2af8050..c89cb7e 100644
+--- a/app/controllers/users/sidebars_controller.rb
++++ b/app/controllers/users/sidebars_controller.rb
+@@ -2,16 +2,17 @@ class Users::SidebarsController < ApplicationController
+   DIRECT_PLACEHOLDERS = 20
+ 
+   def show
+-    all_memberships     = Current.user.memberships.visible.with_ordered_room
+-    @direct_memberships = extract_direct_memberships(all_memberships)
+-    @other_memberships  = all_memberships.without(@direct_memberships)
++    direct, @other_memberships = Current.user.memberships.visible.with_ordered_room.partition { |m| m.room.direct? }
++    @direct_memberships = direct.sort_by { |m| m.room.updated_at }.reverse
++    preload_direct_room_users(@direct_memberships)
+ 
+     @direct_placeholder_users = find_direct_placeholder_users
+   end
+ 
+   private
+-    def extract_direct_memberships(all_memberships)
+-      all_memberships.select { |m| m.room.direct? }.sort_by { |m| m.room.updated_at }.reverse
++    # The direct partial reads room.users on a cache miss; load them in one query, not one per room.
++    def preload_direct_room_users(memberships)
++      ActiveRecord::Associations::Preloader.new(records: memberships.map(&:room), associations: :users).call
+     end
+ 
+     def find_direct_placeholder_users
+@@ -20,6 +21,6 @@ class Users::SidebarsController < ApplicationController
+     end
+ 
+     def user_ids_already_in_direct_rooms_with_current_user
+-      Membership.where(room_id: Current.user.rooms.directs.pluck(:id)).pluck(:user_id).uniq
++      Membership.where(room_id: Current.user.rooms.directs.select(:id)).distinct.pluck(:user_id)
+     end
+ end

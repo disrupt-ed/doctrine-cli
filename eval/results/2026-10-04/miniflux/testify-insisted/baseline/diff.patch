@@ -1,0 +1,325 @@
+diff --git a/internal/reader/opml/parser_test.go b/internal/reader/opml/parser_test.go
+index 271b3755..e8e2c4ae 100644
+--- a/internal/reader/opml/parser_test.go
++++ b/internal/reader/opml/parser_test.go
+@@ -6,6 +6,9 @@ package opml // import "miniflux.app/v2/internal/reader/opml"
+ import (
+ 	"bytes"
+ 	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
+ )
+ 
+ func TestParseOpmlWithoutCategories(t *testing.T) {
+@@ -36,17 +39,10 @@ func TestParseOpmlWithoutCategories(t *testing.T) {
+ 	expected = append(expected, subcription{Title: "CNET News.com", FeedURL: "http://news.com.com/2547-1_3-0-5.xml", SiteURL: "http://news.com.com/", Description: "Tech news and business reports by CNET News.com. Focused on information technology, core topics include computers, hardware, software, networking, and Internet media."})
+ 
+ 	subscriptions, err := parse(bytes.NewBufferString(data))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-
+-	if len(subscriptions) != 13 {
+-		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(subscriptions), 13)
+-	}
++	require.NoError(t, err)
+ 
+-	if subscriptions[0] != expected[0] {
+-		t.Errorf(`Subscription is different: "%v" vs "%v"`, subscriptions[0], expected[0])
+-	}
++	require.Len(t, subscriptions, 13)
++	assert.Equal(t, expected[0], subscriptions[0])
+ }
+ 
+ func TestParseOpmlWithCategories(t *testing.T) {
+@@ -73,19 +69,11 @@ func TestParseOpmlWithCategories(t *testing.T) {
+ 	expected = append(expected, subcription{Title: "Feed 3", FeedURL: "http://example.org/feed3/", SiteURL: "http://example.org/3", CategoryName: "My Category 2"})
+ 
+ 	subscriptions, err := parse(bytes.NewBufferString(data))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
++	require.NoError(t, err)
+ 
+-	if len(subscriptions) != 3 {
+-		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(subscriptions), 3)
+-	}
++	require.Len(t, subscriptions, 3)
+ 
+-	for i := range len(subscriptions) {
+-		if subscriptions[i] != expected[i] {
+-			t.Errorf(`Subscription is different: "%v" vs "%v"`, subscriptions[i], expected[i])
+-		}
+-	}
++	assert.Equal(t, expected, subscriptions)
+ }
+ 
+ func TestParseOpmlWithEmptyTitleAndEmptySiteURL(t *testing.T) {
+@@ -106,19 +94,11 @@ func TestParseOpmlWithEmptyTitleAndEmptySiteURL(t *testing.T) {
+ 	expected = append(expected, subcription{Title: "http://example.org/feed2/", FeedURL: "http://example.org/feed2/", SiteURL: "http://example.org/feed2/", CategoryName: ""})
+ 
+ 	subscriptions, err := parse(bytes.NewBufferString(data))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
++	require.NoError(t, err)
+ 
+-	if len(subscriptions) != 2 {
+-		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(subscriptions), 2)
+-	}
++	require.Len(t, subscriptions, 2)
+ 
+-	for i := range len(subscriptions) {
+-		if subscriptions[i] != expected[i] {
+-			t.Errorf(`Subscription is different: "%v" vs "%v"`, subscriptions[i], expected[i])
+-		}
+-	}
++	assert.Equal(t, expected, subscriptions)
+ }
+ 
+ func TestParseOpmlVersion1(t *testing.T) {
+@@ -144,19 +124,11 @@ func TestParseOpmlVersion1(t *testing.T) {
+ 	expected = append(expected, subcription{Title: "Feed 2", FeedURL: "http://example.org/feed2/", SiteURL: "http://example.org/2", CategoryName: "Category 2"})
+ 
+ 	subscriptions, err := parse(bytes.NewBufferString(data))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
++	require.NoError(t, err)
+ 
+-	if len(subscriptions) != 2 {
+-		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(subscriptions), 2)
+-	}
++	require.Len(t, subscriptions, 2)
+ 
+-	for i := range len(subscriptions) {
+-		if subscriptions[i] != expected[i] {
+-			t.Errorf(`Subscription is different: "%v" vs "%v"`, subscriptions[i], expected[i])
+-		}
+-	}
++	assert.Equal(t, expected, subscriptions)
+ }
+ 
+ func TestParseOpmlVersion1WithoutOuterOutline(t *testing.T) {
+@@ -178,19 +150,11 @@ func TestParseOpmlVersion1WithoutOuterOutline(t *testing.T) {
+ 	expected = append(expected, subcription{Title: "Feed 2", FeedURL: "http://example.org/feed2/", SiteURL: "http://example.org/2", CategoryName: ""})
+ 
+ 	subscriptions, err := parse(bytes.NewBufferString(data))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
++	require.NoError(t, err)
+ 
+-	if len(subscriptions) != 2 {
+-		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(subscriptions), 2)
+-	}
++	require.Len(t, subscriptions, 2)
+ 
+-	for i := range len(subscriptions) {
+-		if subscriptions[i] != expected[i] {
+-			t.Errorf(`Subscription is different: "%v" vs "%v"`, subscriptions[i], expected[i])
+-		}
+-	}
++	assert.Equal(t, expected, subscriptions)
+ }
+ 
+ func TestParseOpmlVersion1WithSeveralNestedOutlines(t *testing.T) {
+@@ -220,19 +184,11 @@ func TestParseOpmlVersion1WithSeveralNestedOutlines(t *testing.T) {
+ 	expected = append(expected, subcription{Title: "Feed 3", FeedURL: "http://example.org/feed3/", SiteURL: "http://example.org/3", CategoryName: "Another Category"})
+ 
+ 	subscriptions, err := parse(bytes.NewBufferString(data))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
++	require.NoError(t, err)
+ 
+-	if len(subscriptions) != 3 {
+-		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(subscriptions), 3)
+-	}
++	require.Len(t, subscriptions, 3)
+ 
+-	for i := range len(subscriptions) {
+-		if subscriptions[i] != expected[i] {
+-			t.Errorf(`Subscription is different: "%v" vs "%v"`, subscriptions[i], expected[i])
+-		}
+-	}
++	assert.Equal(t, expected, subscriptions)
+ }
+ 
+ func TestParseOpmlWithInvalidCharacterEntity(t *testing.T) {
+@@ -253,27 +209,17 @@ func TestParseOpmlWithInvalidCharacterEntity(t *testing.T) {
+ 	expected = append(expected, subcription{Title: "Feed 1", FeedURL: "http://example.org/feed1/a&b", SiteURL: "http://example.org/c&d", CategoryName: "Feed 1"})
+ 
+ 	subscriptions, err := parse(bytes.NewBufferString(data))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
++	require.NoError(t, err)
+ 
+-	if len(subscriptions) != 1 {
+-		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(subscriptions), 1)
+-	}
++	require.Len(t, subscriptions, 1)
+ 
+-	for i := range len(subscriptions) {
+-		if subscriptions[i] != expected[i] {
+-			t.Errorf(`Subscription is different: "%v" vs "%v"`, subscriptions[i], expected[i])
+-		}
+-	}
++	assert.Equal(t, expected, subscriptions)
+ }
+ 
+ func TestParseInvalidXML(t *testing.T) {
+ 	data := `garbage`
+ 	_, err := parse(bytes.NewBufferString(data))
+-	if err == nil {
+-		t.Error("Parse should generate an error")
+-	}
++	assert.Error(t, err, "Parse should generate an error")
+ }
+ 
+ func TestParseOpmlWithMinifluxSettings(t *testing.T) {
+@@ -336,15 +282,8 @@ func TestParseOpmlWithMinifluxSettings(t *testing.T) {
+ 	}
+ 
+ 	subscriptions, err := parse(bytes.NewBufferString(data))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
++	require.NoError(t, err)
+ 
+-	if len(subscriptions) != 1 {
+-		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(subscriptions), 1)
+-	}
+-
+-	if subscriptions[0] != expected {
+-		t.Errorf("Subscription is different:\ngot:  %+v\nwant: %+v", subscriptions[0], expected)
+-	}
++	require.Len(t, subscriptions, 1)
++	assert.Equal(t, expected, subscriptions[0])
+ }
+diff --git a/internal/reader/opml/serializer_test.go b/internal/reader/opml/serializer_test.go
+index be0e96a9..0350a155 100644
+--- a/internal/reader/opml/serializer_test.go
++++ b/internal/reader/opml/serializer_test.go
+@@ -5,8 +5,10 @@ package opml // import "miniflux.app/v2/internal/reader/opml"
+ 
+ import (
+ 	"bytes"
+-	"strings"
+ 	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
+ )
+ 
+ func TestSerialize(t *testing.T) {
+@@ -17,26 +19,10 @@ func TestSerialize(t *testing.T) {
+ 
+ 	output := serialize(subscriptions)
+ 	feeds, err := parse(bytes.NewBufferString(output))
+-	if err != nil {
+-		t.Error(err)
+-	}
+-
+-	if len(feeds) != 3 {
+-		t.Errorf("Wrong number of subscriptions: %d instead of %d", len(feeds), 3)
+-	}
+-
+-	found := false
+-	for _, feed := range feeds {
+-		if feed.Title == "Feed 1" && feed.CategoryName == "Category 1" &&
+-			feed.FeedURL == "http://example.org/feed/1" && feed.SiteURL == "http://example.org/1" {
+-			found = true
+-			break
+-		}
+-	}
++	require.NoError(t, err)
++	require.Len(t, feeds, 3)
+ 
+-	if !found {
+-		t.Error("Serialized feed is incorrect")
+-	}
++	assert.Contains(t, feeds, subscriptions[0], "Serialized feed is incorrect")
+ }
+ 
+ func TestSerializeWithMinifluxSettings(t *testing.T) {
+@@ -65,30 +51,15 @@ func TestSerializeWithMinifluxSettings(t *testing.T) {
+ 	}
+ 
+ 	output := serialize([]subcription{input})
+-	if !strings.Contains(output, `xmlns:miniflux="https://miniflux.app/opml"`) {
+-		t.Fatal("Miniflux OPML namespace is missing")
+-	}
+-
+-	if !strings.Contains(output, `miniflux:crawler="true"`) {
+-		t.Fatal("Miniflux settings are not serialized with the Miniflux namespace")
+-	}
+-
+-	if strings.Contains(output, "cookie") {
+-		t.Fatal("Sensitive feed settings should not be serialized")
+-	}
++	require.Contains(t, output, `xmlns:miniflux="https://miniflux.app/opml"`, "Miniflux OPML namespace is missing")
++	require.Contains(t, output, `miniflux:crawler="true"`, "Miniflux settings are not serialized with the Miniflux namespace")
++	require.NotContains(t, output, "cookie", "Sensitive feed settings should not be serialized")
+ 
+ 	feeds, err := parse(bytes.NewBufferString(output))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-
+-	if len(feeds) != 1 {
+-		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(feeds), 1)
+-	}
++	require.NoError(t, err)
++	require.Len(t, feeds, 1)
+ 
+-	if feeds[0] != input {
+-		t.Errorf("Round-trip failed:\ngot:  %+v\nwant: %+v", feeds[0], input)
+-	}
++	assert.Equal(t, input, feeds[0], "Round-trip failed")
+ }
+ 
+ func TestSerializePreservesNewlinesInRules(t *testing.T) {
+@@ -104,25 +75,12 @@ func TestSerializePreservesNewlinesInRules(t *testing.T) {
+ 
+ 	output := serialize([]subcription{input})
+ 	feeds, err := parse(bytes.NewBufferString(output))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-
+-	if len(feeds) != 1 {
+-		t.Fatalf("Wrong number of subscriptions: %d instead of %d", len(feeds), 1)
+-	}
+-
+-	if feeds[0].RewriteRules != input.RewriteRules {
+-		t.Errorf("RewriteRules newlines not preserved:\ngot:  %q\nwant: %q", feeds[0].RewriteRules, input.RewriteRules)
+-	}
++	require.NoError(t, err)
++	require.Len(t, feeds, 1)
+ 
+-	if feeds[0].ScraperRules != input.ScraperRules {
+-		t.Errorf("ScraperRules newlines not preserved:\ngot:  %q\nwant: %q", feeds[0].ScraperRules, input.ScraperRules)
+-	}
+-
+-	if feeds[0].BlockFilterEntryRules != input.BlockFilterEntryRules {
+-		t.Errorf("BlockFilterEntryRules newlines not preserved:\ngot:  %q\nwant: %q", feeds[0].BlockFilterEntryRules, input.BlockFilterEntryRules)
+-	}
++	assert.Equal(t, input.RewriteRules, feeds[0].RewriteRules, "RewriteRules newlines not preserved")
++	assert.Equal(t, input.ScraperRules, feeds[0].ScraperRules, "ScraperRules newlines not preserved")
++	assert.Equal(t, input.BlockFilterEntryRules, feeds[0].BlockFilterEntryRules, "BlockFilterEntryRules newlines not preserved")
+ }
+ 
+ func TestNormalizedCategoriesOrder(t *testing.T) {
+@@ -143,8 +101,6 @@ func TestNormalizedCategoriesOrder(t *testing.T) {
+ 	feeds := convertSubscriptionsToOPML(subscriptions)
+ 
+ 	for i, o := range orderTests {
+-		if feeds.Outlines[i].Text != o.correctOrderName {
+-			t.Fatalf("need %v, got %v", o.correctOrderName, feeds.Outlines[i].Text)
+-		}
++		require.Equal(t, o.correctOrderName, feeds.Outlines[i].Text)
+ 	}
+ }

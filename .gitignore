@@ -1,0 +1,2 @@
+# Raw eval transcripts are large; transcript.md keeps the readable version.
+eval/results/**/transcript.jsonl

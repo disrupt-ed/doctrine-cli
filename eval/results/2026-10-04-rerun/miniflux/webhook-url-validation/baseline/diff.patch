@@ -1,0 +1,346 @@
+diff --git a/internal/locale/translations/ar_SA.json b/internal/locale/translations/ar_SA.json
+index d779ebd8..2c9e76b7 100644
+--- a/internal/locale/translations/ar_SA.json
++++ b/internal/locale/translations/ar_SA.json
+@@ -145,6 +145,7 @@
+     "error.invalid_site_url": "رابط الموقع غير صالح.",
+     "error.invalid_theme": "السمة غير صالحة.",
+     "error.invalid_timezone": "المنطقة الزمنية غير صالحة.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux غير قادر على الوصول إلى هذا الموقع بسبب خطأ في الشبكة: %v.",
+     "error.network_timeout": "هذا الموقع بطيء جداً وانتهى وقت الطلب: %v",
+diff --git a/internal/locale/translations/de_DE.json b/internal/locale/translations/de_DE.json
+index 46068777..ff6f15eb 100644
+--- a/internal/locale/translations/de_DE.json
++++ b/internal/locale/translations/de_DE.json
+@@ -131,6 +131,7 @@
+     "error.invalid_site_url": "Ungültiger Site-URL.",
+     "error.invalid_theme": "Ungültiges Thema.",
+     "error.invalid_timezone": "Ungültige Zeitzone.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux kann die Webseite aufgrund eines Netzwerk-Fehlers nicht erreichen: %v",
+     "error.network_timeout": "Die Webseite ist zu langsam und die Anfrage ist abgelaufen: %v.",
+diff --git a/internal/locale/translations/el_EL.json b/internal/locale/translations/el_EL.json
+index fee77a6a..4cc2ddbe 100644
+--- a/internal/locale/translations/el_EL.json
++++ b/internal/locale/translations/el_EL.json
+@@ -131,6 +131,7 @@
+     "error.invalid_site_url": "Μη έγκυρη διεύθυνση URL ιστότοπου.",
+     "error.invalid_theme": "Μη έγκυρο θέμα.",
+     "error.invalid_timezone": "Μη έγκυρη ζώνη ώρας.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Το Miniflux δεν μπορεί να φτάσει σε αυτόν τον ιστότοπο λόγω σφάλματος δικτύου: %v.",
+     "error.network_timeout": "Αυτός ο ιστότοπος είναι πολύ αργός και το αίτημα έληξε: %v",
+diff --git a/internal/locale/translations/en_US.json b/internal/locale/translations/en_US.json
+index f423e952..e5563116 100644
+--- a/internal/locale/translations/en_US.json
++++ b/internal/locale/translations/en_US.json
+@@ -133,6 +133,7 @@
+     "error.invalid_site_url": "Invalid site URL.",
+     "error.invalid_theme": "Invalid theme.",
+     "error.invalid_timezone": "Invalid timezone.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux is not able to reach this website due to a network error: %v.",
+     "error.network_timeout": "This website is too slow and the request timed out: %v",
+diff --git a/internal/locale/translations/es_ES.json b/internal/locale/translations/es_ES.json
+index 9eb1d928..5480836b 100644
+--- a/internal/locale/translations/es_ES.json
++++ b/internal/locale/translations/es_ES.json
+@@ -131,6 +131,7 @@
+     "error.invalid_site_url": "URL del sitio no válida.",
+     "error.invalid_theme": "Tema no válido.",
+     "error.invalid_timezone": "Zona horaria no válida.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux no puede acceder a este sitio web debido a un error de red: %v.",
+     "error.network_timeout": "Este sitio web es demasiado lento y se agotó el tiempo de espera de la solicitud: %v",
+diff --git a/internal/locale/translations/fi_FI.json b/internal/locale/translations/fi_FI.json
+index 20e240b7..79631052 100644
+--- a/internal/locale/translations/fi_FI.json
++++ b/internal/locale/translations/fi_FI.json
+@@ -131,6 +131,7 @@
+     "error.invalid_site_url": "Virheellinen sivuston URL-osoite.",
+     "error.invalid_theme": "Virheellinen teema.",
+     "error.invalid_timezone": "Virheellinen aikavyöhyke.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux ei tavoita tätä sivustoa verkkovirheen vuoksi: %v.",
+     "error.network_timeout": "Tämä sivusto on liian hidas ja pyyntö aikakatkaistiin: %v",
+diff --git a/internal/locale/translations/fr_FR.json b/internal/locale/translations/fr_FR.json
+index 6f02344e..2d9785ca 100644
+--- a/internal/locale/translations/fr_FR.json
++++ b/internal/locale/translations/fr_FR.json
+@@ -131,6 +131,7 @@
+     "error.invalid_site_url": "URL de site non valide.",
+     "error.invalid_theme": "Thème non valide.",
+     "error.invalid_timezone": "Fuseau horaire non valide.",
++    "error.invalid_webhook_url": "URL de webhook non valide. Elle doit être une URL HTTP ou HTTPS absolue.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux n'est pas en mesure de se connecter à ce site web à cause d'un problème réseau : %v.",
+     "error.network_timeout": "Ce site web est trop lent à répondre : %v.",
+diff --git a/internal/locale/translations/gl_ES.json b/internal/locale/translations/gl_ES.json
+index f1b8050f..2a1f30d0 100644
+--- a/internal/locale/translations/gl_ES.json
++++ b/internal/locale/translations/gl_ES.json
+@@ -133,6 +133,7 @@
+     "error.invalid_site_url": "URL da web non válido.",
+     "error.invalid_theme": "Decorado non válido.",
+     "error.invalid_timezone": "Zona horaria non válida.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux non pode acadar esta web por mor dun erro na rede: %v.",
+     "error.network_timeout": "Esta web é demasiado lenta e caducou a petición: %v",
+diff --git a/internal/locale/translations/hi_IN.json b/internal/locale/translations/hi_IN.json
+index 1bb01b97..307b75f1 100644
+--- a/internal/locale/translations/hi_IN.json
++++ b/internal/locale/translations/hi_IN.json
+@@ -131,6 +131,7 @@
+     "error.invalid_site_url": "अमान्य साइट यूआरएल",
+     "error.invalid_theme": "अमान्य थीम.",
+     "error.invalid_timezone": "अमान्य समयक्षेत्र.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "नेटवर्क त्रुटि के कारण मिनीफ्लक्स इस वेबसाइट तक नहीं पहुँच पा रहा: %v.",
+     "error.network_timeout": "यह वेबसाइट बहुत धीमी है और अनुरोध का समय समाप्त हो गया: %v",
+diff --git a/internal/locale/translations/id_ID.json b/internal/locale/translations/id_ID.json
+index e27cd0d7..ca441167 100644
+--- a/internal/locale/translations/id_ID.json
++++ b/internal/locale/translations/id_ID.json
+@@ -128,6 +128,7 @@
+     "error.invalid_site_url": "URL situs tidak valid.",
+     "error.invalid_theme": "Tema tidak valid.",
+     "error.invalid_timezone": "Zona waktu tidak valid.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux tidak dapat menjangkau situs ini dikarenakan galat jaringan: %v.",
+     "error.network_timeout": "Situs ini terlalu lambat dan permintaan ke situs terlalu lama: %v",
+diff --git a/internal/locale/translations/it_IT.json b/internal/locale/translations/it_IT.json
+index 1f6a03fb..70432504 100644
+--- a/internal/locale/translations/it_IT.json
++++ b/internal/locale/translations/it_IT.json
+@@ -131,6 +131,7 @@
+     "error.invalid_site_url": "URL del sito non valido.",
+     "error.invalid_theme": "Tema non valido.",
+     "error.invalid_timezone": "Fuso orario non valido.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux non riesce a raggiungere questo sito web a causa di un errore di rete: %v.",
+     "error.network_timeout": "Questo sito web è troppo lento e la richiesta è scaduta: %v",
+diff --git a/internal/locale/translations/ja_JP.json b/internal/locale/translations/ja_JP.json
+index c31249e8..99365a57 100644
+--- a/internal/locale/translations/ja_JP.json
++++ b/internal/locale/translations/ja_JP.json
+@@ -128,6 +128,7 @@
+     "error.invalid_site_url": "サイト URL が無効です。",
+     "error.invalid_theme": "テーマが無効です。",
+     "error.invalid_timezone": "タイムゾーンが無効です。",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux はネットワークエラーのためこのウェブサイトに到達できません: %v.",
+     "error.network_timeout": "このウェブサイトは応答が遅すぎるためタイムアウトしました: %v",
+diff --git a/internal/locale/translations/ko_KR.json b/internal/locale/translations/ko_KR.json
+index 285904ec..16ab7ca7 100644
+--- a/internal/locale/translations/ko_KR.json
++++ b/internal/locale/translations/ko_KR.json
+@@ -128,6 +128,7 @@
+     "error.invalid_site_url": "사이트 URL이 유효하지 않습니다.",
+     "error.invalid_theme": "테마가 유효하지 않습니다.",
+     "error.invalid_timezone": "시간대가 유효하지 않습니다.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "네트워크 오류로 인해 Miniflux가 이 웹사이트에 도달할 수 없습니다: %v.",
+     "error.network_timeout": "이 웹사이트의 응답이 너무 느려 시간 초과되었습니다: %v",
+diff --git a/internal/locale/translations/nan_Latn_pehoeji.json b/internal/locale/translations/nan_Latn_pehoeji.json
+index 75ca826e..d5af2b1a 100644
+--- a/internal/locale/translations/nan_Latn_pehoeji.json
++++ b/internal/locale/translations/nan_Latn_pehoeji.json
+@@ -128,6 +128,7 @@
+     "error.invalid_site_url": "Siau-sit lâi-goân ê bāng-chām ê bāng-chí ū būn-tôe.",
+     "error.invalid_theme": "Ū būn-tôe ê chú-tôe.",
+     "error.invalid_timezone": "Ū būn-tôe ê sî-khu.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux bô-hoat-tō͘ liân kàu chit ê bāng-chām, ū khó-lêng sī bāng-lō͘ būn-tôe: %v.",
+     "error.network_timeout": "Chit ê bāng-chām ê hôe-èng siuⁿ bān, chhéng-kiû chhiau-kè sî-kan: %v.",
+diff --git a/internal/locale/translations/nl_NL.json b/internal/locale/translations/nl_NL.json
+index c7ba53af..8f8fdbab 100644
+--- a/internal/locale/translations/nl_NL.json
++++ b/internal/locale/translations/nl_NL.json
+@@ -131,6 +131,7 @@
+     "error.invalid_site_url": "Ongeldige site URL.",
+     "error.invalid_theme": "Ongeldig thema.",
+     "error.invalid_timezone": "Ongeldige tijdzone.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux kan deze website niet bereiken vanwege een netwerkfout: %v.",
+     "error.network_timeout": "Deze website is te traag en de aanvraag gaf timeout: %v",
+diff --git a/internal/locale/translations/pl_PL.json b/internal/locale/translations/pl_PL.json
+index e40e9ce5..099eb488 100644
+--- a/internal/locale/translations/pl_PL.json
++++ b/internal/locale/translations/pl_PL.json
+@@ -134,6 +134,7 @@
+     "error.invalid_site_url": "Nieprawidłowy adres URL witryny.",
+     "error.invalid_theme": "Nieprawidłowy motyw.",
+     "error.invalid_timezone": "Nieprawidłowa strefa czasowa.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Uwierzytelnianie lokalne jest wyłączone. Haseł nie można zmieniać.",
+     "error.network_operation": "Miniflux nie może połączyć się z tą witryną z powodu błędu sieci: %v.",
+     "error.network_timeout": "Ta witryna internetowa jest zbyt wolna i upłynął limit czasu żądania: %v",
+diff --git a/internal/locale/translations/pt_BR.json b/internal/locale/translations/pt_BR.json
+index f7bd3333..010287fc 100644
+--- a/internal/locale/translations/pt_BR.json
++++ b/internal/locale/translations/pt_BR.json
+@@ -131,6 +131,7 @@
+     "error.invalid_site_url": "URL de site inválido.",
+     "error.invalid_theme": "Tema inválido.",
+     "error.invalid_timezone": "Fuso horário inválido.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "O Miniflux não conseguiu acessar este site devido a um erro de rede: %v.",
+     "error.network_timeout": "Este site está muito lento e a solicitação expirou: %v",
+diff --git a/internal/locale/translations/ro_RO.json b/internal/locale/translations/ro_RO.json
+index 17f5998d..5100efe9 100644
+--- a/internal/locale/translations/ro_RO.json
++++ b/internal/locale/translations/ro_RO.json
+@@ -134,6 +134,7 @@
+     "error.invalid_site_url": "Adresa URL a site-ului este invalidă.",
+     "error.invalid_theme": "Temă invalidă.",
+     "error.invalid_timezone": "Dată/oră invalide.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux nu poate ajunge la acest site din cauza unei erori de rețea: %v.",
+     "error.network_timeout": "Acest site web este prea lent și conexiunea nu s-a realizat: %v",
+diff --git a/internal/locale/translations/ru_RU.json b/internal/locale/translations/ru_RU.json
+index 535501fd..a8454fd0 100644
+--- a/internal/locale/translations/ru_RU.json
++++ b/internal/locale/translations/ru_RU.json
+@@ -134,6 +134,7 @@
+     "error.invalid_site_url": "Недействительный ссылка сайта.",
+     "error.invalid_theme": "Недопустимая тема.",
+     "error.invalid_timezone": "Недопустимый часовой пояс.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux не может открыть сайт из-за ошибки сети: %v.",
+     "error.network_timeout": "Этот сайт слишком медленный и время ожидания запроса истекло: %v",
+diff --git a/internal/locale/translations/tr_TR.json b/internal/locale/translations/tr_TR.json
+index 9d55d911..52efa69e 100644
+--- a/internal/locale/translations/tr_TR.json
++++ b/internal/locale/translations/tr_TR.json
+@@ -131,6 +131,7 @@
+     "error.invalid_site_url": "Geçersiz site URL'si.",
+     "error.invalid_theme": "Geçersiz tema.",
+     "error.invalid_timezone": "Geçersiz saat dilimi.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux bir ağ hatası nedeniyle bu websitesine erişemiyor: %v.",
+     "error.network_timeout": "Bu websitesi çok yavaş ve istek zaman aşımına uğradı: %v",
+diff --git a/internal/locale/translations/uk_UA.json b/internal/locale/translations/uk_UA.json
+index 491a3edd..e3514a96 100644
+--- a/internal/locale/translations/uk_UA.json
++++ b/internal/locale/translations/uk_UA.json
+@@ -134,6 +134,7 @@
+     "error.invalid_site_url": "Недійсна URL-адреса сайту.",
+     "error.invalid_theme": "Недійсна тема.",
+     "error.invalid_timezone": "Недійсний часовий пояс.",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux не може отримати доступ до цього сайту через помилку мережі: %v.",
+     "error.network_timeout": "Цей сайт занадто повільний і запит перевищив час очікування: %v",
+diff --git a/internal/locale/translations/zh_CN.json b/internal/locale/translations/zh_CN.json
+index a67ec73c..bbdddac2 100644
+--- a/internal/locale/translations/zh_CN.json
++++ b/internal/locale/translations/zh_CN.json
+@@ -128,6 +128,7 @@
+     "error.invalid_site_url": "无效的网站 URL。",
+     "error.invalid_theme": "无效的主题。",
+     "error.invalid_timezone": "无效的时区。",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "由于网络错误，Miniflux 无法访问此网站：%v。",
+     "error.network_timeout": "该网站响应过慢，请求已超时：%v",
+diff --git a/internal/locale/translations/zh_TW.json b/internal/locale/translations/zh_TW.json
+index 507ce2f2..6cb7d426 100644
+--- a/internal/locale/translations/zh_TW.json
++++ b/internal/locale/translations/zh_TW.json
+@@ -128,6 +128,7 @@
+     "error.invalid_site_url": "Feed 網站的網址無效。",
+     "error.invalid_theme": "無效的主題。",
+     "error.invalid_timezone": "無效的時區。",
++    "error.invalid_webhook_url": "Invalid webhook URL. It must be an absolute HTTP or HTTPS URL.",
+     "error.local_auth_disabled": "Local authentication is disabled. Passwords cannot be changed.",
+     "error.network_operation": "Miniflux 無法連線到該網站，可能是網路問題：%v。",
+     "error.network_timeout": "該網站回應過慢，請求逾時：%v。",
+diff --git a/internal/ui/form/integration.go b/internal/ui/form/integration.go
+index a41c26dd..b4b122de 100644
+--- a/internal/ui/form/integration.go
++++ b/internal/ui/form/integration.go
+@@ -9,6 +9,7 @@ import (
+ 
+ 	"miniflux.app/v2/internal/locale"
+ 	"miniflux.app/v2/internal/model"
++	"miniflux.app/v2/internal/urllib"
+ )
+ 
+ // IntegrationForm represents user integration settings form.
+@@ -269,6 +270,17 @@ func (i IntegrationForm) ValidateGoogleReader(storedPasswordHash string) *locale
+ 	return nil
+ }
+ 
++// ValidateWebhook ensures the webhook URL, when provided, is an absolute HTTP(S) URL with a host.
++func (i IntegrationForm) ValidateWebhook() *locale.LocalizedError {
++	if !i.WebhookEnabled || i.WebhookURL == "" {
++		return nil
++	}
++	if !urllib.IsValidWebhookURL(i.WebhookURL) {
++		return locale.NewLocalizedError("error.invalid_webhook_url")
++	}
++	return nil
++}
++
+ // NewIntegrationForm returns a new IntegrationForm.
+ func NewIntegrationForm(r *http.Request) *IntegrationForm {
+ 	return &IntegrationForm{
+diff --git a/internal/ui/integration_update.go b/internal/ui/integration_update.go
+index ffa68ce3..060b96a4 100644
+--- a/internal/ui/integration_update.go
++++ b/internal/ui/integration_update.go
+@@ -67,6 +67,12 @@ func (h *handler) updateIntegration(w http.ResponseWriter, r *http.Request) {
+ 		integration.GoogleReaderPassword = ""
+ 	}
+ 
++	if validationErr := integrationForm.ValidateWebhook(); validationErr != nil {
++		sess.SetErrorMessage(validationErr.Translate(sess.Language()))
++		response.HTMLRedirect(w, r, h.routePath("/integrations"))
++		return
++	}
++
+ 	if integrationForm.WebhookEnabled {
+ 		if integrationForm.WebhookURL == "" {
+ 			integration.WebhookEnabled = false
+diff --git a/internal/urllib/url.go b/internal/urllib/url.go
+index c7f50550..3c1dd399 100644
+--- a/internal/urllib/url.go
++++ b/internal/urllib/url.go
+@@ -80,6 +80,18 @@ func IsValidProxyURL(inputURL string) bool {
+ 	return parsedURL.IsAbs() && parsedURL.Host != ""
+ }
+ 
++// IsValidWebhookURL reports whether the url is absolute, has a host and starts with an HTTP or HTTPS scheme.
++func IsValidWebhookURL(inputURL string) bool {
++	if !hasHTTPPrefix(inputURL) {
++		return false
++	}
++	parsedURL, err := url.Parse(inputURL)
++	if err != nil {
++		return false
++	}
++	return parsedURL.IsAbs() && parsedURL.Host != ""
++}
++
+ // resolveToAbsoluteURL resolves a relative URL using a base URL, parsing the base only if needed.
+ func resolveToAbsoluteURL(parsedBaseURL *url.URL, baseURL, relativeURL string) (string, error) {
+ 	// Avoid parsing the relative URL if it's already absolute

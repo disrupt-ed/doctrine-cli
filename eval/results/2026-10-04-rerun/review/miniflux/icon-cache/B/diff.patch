@@ -1,0 +1,151 @@
+diff --git a/internal/storage/icon.go b/internal/storage/icon.go
+index 8c8dcef4..b0f55ea7 100644
+--- a/internal/storage/icon.go
++++ b/internal/storage/icon.go
+@@ -8,11 +8,50 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"strings"
++	"sync"
+ 
+ 	"miniflux.app/v2/internal/crypto"
+ 	"miniflux.app/v2/internal/model"
+ )
+ 
++const maxCachedIcons = 512
++
++// iconCache keeps recently served icons in memory, keyed by external ID.
++// An external ID always maps to the same content (icons are deduplicated by
++// hash and never updated), so entries only go stale when the icon is deleted.
++// The zero value is ready to use.
++type iconCache struct {
++	mu    sync.RWMutex
++	icons map[string]*model.Icon
++}
++
++func (c *iconCache) get(externalID string) *model.Icon {
++	c.mu.RLock()
++	defer c.mu.RUnlock()
++	return c.icons[externalID]
++}
++
++func (c *iconCache) set(icon *model.Icon) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.icons == nil {
++		c.icons = make(map[string]*model.Icon)
++	}
++	if _, exists := c.icons[icon.ExternalID]; !exists && len(c.icons) >= maxCachedIcons {
++		for k := range c.icons { // Evict an arbitrary entry.
++			delete(c.icons, k)
++			break
++		}
++	}
++	c.icons[icon.ExternalID] = icon
++}
++
++func (c *iconCache) clear() {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	c.icons = nil
++}
++
+ // HasFeedIcon reports whether the specified feed already has an associated icon record.
+ func (s *Storage) HasFeedIcon(feedID int64) bool {
+ 	var result bool
+@@ -54,7 +93,12 @@ func (s *Storage) IconByUserAndIconID(userID, iconID int64) (*model.Icon, error)
+ }
+ 
+ // IconByExternalID fetches an icon using its external identifier, returning nil when no match exists.
++// Found icons are cached in memory; callers must not modify the returned icon.
+ func (s *Storage) IconByExternalID(externalIconID string) (*model.Icon, error) {
++	if icon := s.icons.get(externalIconID); icon != nil {
++		return icon, nil
++	}
++
+ 	var icon model.Icon
+ 	query := `
+ 		SELECT
+@@ -73,6 +117,7 @@ func (s *Storage) IconByExternalID(externalIconID string) (*model.Icon, error) {
+ 	case err != nil:
+ 		return nil, fmt.Errorf("store: cannot load icon external_id=%s: %w", externalIconID, err)
+ 	default:
++		s.icons.set(&icon)
+ 		return &icon, nil
+ 	}
+ }
+@@ -171,6 +216,9 @@ func (s *Storage) CleanupOrphanIcons() (int64, error) {
+ 	}
+ 
+ 	n, _ := result.RowsAffected()
++	if n > 0 {
++		s.icons.clear()
++	}
+ 	return n, nil
+ }
+ 
+diff --git a/internal/storage/icon_cache_test.go b/internal/storage/icon_cache_test.go
+new file mode 100644
+index 00000000..29ea8e82
+--- /dev/null
++++ b/internal/storage/icon_cache_test.go
+@@ -0,0 +1,39 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package storage // import "miniflux.app/v2/internal/storage"
++
++import (
++	"strconv"
++	"testing"
++
++	"miniflux.app/v2/internal/model"
++)
++
++func TestIconCache(t *testing.T) {
++	var c iconCache
++	if c.get("a") != nil {
++		t.Fatal("zero value cache should be empty")
++	}
++
++	icon := &model.Icon{ExternalID: "a"}
++	c.set(icon)
++	if c.get("a") != icon {
++		t.Fatal("expected cached icon")
++	}
++
++	c.clear()
++	if c.get("a") != nil {
++		t.Fatal("expected cache to be cleared")
++	}
++}
++
++func TestIconCacheIsBounded(t *testing.T) {
++	var c iconCache
++	for i := 0; i < maxCachedIcons*2; i++ {
++		c.set(&model.Icon{ExternalID: strconv.Itoa(i)})
++	}
++	if len(c.icons) != maxCachedIcons {
++		t.Fatalf("expected %d entries, got %d", maxCachedIcons, len(c.icons))
++	}
++}
+diff --git a/internal/storage/storage.go b/internal/storage/storage.go
+index ffae9692..b640ad2b 100644
+--- a/internal/storage/storage.go
++++ b/internal/storage/storage.go
+@@ -11,12 +11,13 @@ import (
+ 
+ // Storage handles all operations related to the database.
+ type Storage struct {
+-	db *sql.DB
++	db    *sql.DB
++	icons iconCache
+ }
+ 
+ // NewStorage returns a new Storage.
+ func NewStorage(db *sql.DB) *Storage {
+-	return &Storage{db}
++	return &Storage{db: db}
+ }
+ 
+ // DatabaseVersion returns the version of the database which is in use.

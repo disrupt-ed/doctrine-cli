@@ -1,0 +1,150 @@
+diff --git a/internal/storage/icon.go b/internal/storage/icon.go
+index 8c8dcef4..9a2c2be7 100644
+--- a/internal/storage/icon.go
++++ b/internal/storage/icon.go
+@@ -54,7 +54,13 @@ func (s *Storage) IconByUserAndIconID(userID, iconID int64) (*model.Icon, error)
+ }
+ 
+ // IconByExternalID fetches an icon using its external identifier, returning nil when no match exists.
++// Results are served from an in-memory cache when possible; the returned icon
++// is shared and must not be modified by callers.
+ func (s *Storage) IconByExternalID(externalIconID string) (*model.Icon, error) {
++	if icon, found := s.iconCache.get(externalIconID); found {
++		return icon, nil
++	}
++
+ 	var icon model.Icon
+ 	query := `
+ 		SELECT
+@@ -73,6 +79,7 @@ func (s *Storage) IconByExternalID(externalIconID string) (*model.Icon, error) {
+ 	case err != nil:
+ 		return nil, fmt.Errorf("store: cannot load icon external_id=%s: %w", externalIconID, err)
+ 	default:
++		s.iconCache.set(externalIconID, &icon)
+ 		return &icon, nil
+ 	}
+ }
+@@ -170,6 +177,8 @@ func (s *Storage) CleanupOrphanIcons() (int64, error) {
+ 		return 0, fmt.Errorf(`store: unable to clean orphan icons: %v`, err)
+ 	}
+ 
++	s.iconCache.clear()
++
+ 	n, _ := result.RowsAffected()
+ 	return n, nil
+ }
+diff --git a/internal/storage/icon_cache.go b/internal/storage/icon_cache.go
+new file mode 100644
+index 00000000..767aa816
+--- /dev/null
++++ b/internal/storage/icon_cache.go
+@@ -0,0 +1,89 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package storage // import "miniflux.app/v2/internal/storage"
++
++import (
++	"container/list"
++	"sync"
++
++	"miniflux.app/v2/internal/model"
++)
++
++// iconCacheMaxBytes bounds the memory used by the icon cache (sum of icon contents).
++const iconCacheMaxBytes = 32 * 1024 * 1024
++
++type iconCacheEntry struct {
++	externalID string
++	icon       *model.Icon
++}
++
++// iconCache is a concurrency-safe LRU cache of icons keyed by external ID,
++// bounded by the total size of the icon contents.
++//
++// Icons are content-addressed (deduplicated by hash) and never modified once
++// stored, so entries cannot become stale; they only need to be dropped when the
++// underlying row is deleted. Cached icons are shared and must not be mutated.
++type iconCache struct {
++	mu       sync.Mutex
++	maxBytes int
++	bytes    int
++	order    *list.List // front = most recently used
++	entries  map[string]*list.Element
++}
++
++func newIconCache(maxBytes int) *iconCache {
++	return &iconCache{
++		maxBytes: maxBytes,
++		order:    list.New(),
++		entries:  make(map[string]*list.Element),
++	}
++}
++
++func (c *iconCache) get(externalID string) (*model.Icon, bool) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	element, found := c.entries[externalID]
++	if !found {
++		return nil, false
++	}
++	c.order.MoveToFront(element)
++	return element.Value.(*iconCacheEntry).icon, true
++}
++
++func (c *iconCache) set(externalID string, icon *model.Icon) {
++	size := len(icon.Content)
++	if size > c.maxBytes {
++		return
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	if element, found := c.entries[externalID]; found {
++		c.bytes -= len(element.Value.(*iconCacheEntry).icon.Content)
++		element.Value = &iconCacheEntry{externalID, icon}
++		c.order.MoveToFront(element)
++	} else {
++		c.entries[externalID] = c.order.PushFront(&iconCacheEntry{externalID, icon})
++	}
++	c.bytes += size
++
++	for c.bytes > c.maxBytes {
++		oldest := c.order.Back()
++		entry := oldest.Value.(*iconCacheEntry)
++		c.order.Remove(oldest)
++		delete(c.entries, entry.externalID)
++		c.bytes -= len(entry.icon.Content)
++	}
++}
++
++func (c *iconCache) clear() {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	c.order.Init()
++	clear(c.entries)
++	c.bytes = 0
++}
+diff --git a/internal/storage/storage.go b/internal/storage/storage.go
+index ffae9692..2db94c90 100644
+--- a/internal/storage/storage.go
++++ b/internal/storage/storage.go
+@@ -11,12 +11,13 @@ import (
+ 
+ // Storage handles all operations related to the database.
+ type Storage struct {
+-	db *sql.DB
++	db        *sql.DB
++	iconCache *iconCache
+ }
+ 
+ // NewStorage returns a new Storage.
+ func NewStorage(db *sql.DB) *Storage {
+-	return &Storage{db}
++	return &Storage{db: db, iconCache: newIconCache(iconCacheMaxBytes)}
+ }
+ 
+ // DatabaseVersion returns the version of the database which is in use.

@@ -1,0 +1,689 @@
+diff --git a/internal/database/migrations.go b/internal/database/migrations.go
+index 23bb7d46..02208a76 100644
+--- a/internal/database/migrations.go
++++ b/internal/database/migrations.go
+@@ -1579,4 +1579,14 @@ var migrations = [...]func(tx *sql.Tx) error{
+ 		`)
+ 		return err
+ 	},
++	func(tx *sql.Tx) (err error) {
++		_, err = tx.Exec(`
++			ALTER TABLE integrations
++				ADD COLUMN gotify_enabled bool default 'f',
++				ADD COLUMN gotify_url text default '',
++				ADD COLUMN gotify_token text default '',
++				ADD COLUMN gotify_priority int default '5';
++		`)
++		return err
++	},
+ }
+diff --git a/internal/integration/gotify/gotify.go b/internal/integration/gotify/gotify.go
+new file mode 100644
+index 00000000..a12e877d
+--- /dev/null
++++ b/internal/integration/gotify/gotify.go
+@@ -0,0 +1,117 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package gotify // import "miniflux.app/v2/internal/integration/gotify"
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"log/slog"
++	"net/http"
++	"net/url"
++	"strings"
++	"time"
++
++	"miniflux.app/v2/internal/config"
++	"miniflux.app/v2/internal/http/client"
++	"miniflux.app/v2/internal/model"
++	"miniflux.app/v2/internal/version"
++)
++
++const defaultClientTimeout = 10 * time.Second
++
++type Client struct {
++	gotifyURL, gotifyToken string
++	gotifyPriority         int
++}
++
++func NewClient(gotifyURL, gotifyToken string, gotifyPriority int) *Client {
++	return &Client{
++		gotifyURL:      gotifyURL,
++		gotifyToken:    gotifyToken,
++		gotifyPriority: gotifyPriority,
++	}
++}
++
++func (c *Client) SendMessages(feed *model.Feed, entries model.Entries) error {
++	if c.gotifyURL == "" || c.gotifyToken == "" {
++		return fmt.Errorf("gotify: missing server URL or application token")
++	}
++
++	for _, entry := range entries {
++		message := &gotifyMessage{
++			Title:    feed.Title,
++			Message:  entry.Title,
++			Priority: c.gotifyPriority,
++		}
++		message.Extras.ClientNotification.Click.URL = entry.URL
++
++		slog.Debug("Sending Gotify message",
++			slog.String("url", c.gotifyURL),
++			slog.Int("priority", message.Priority),
++			slog.String("message", message.Message),
++			slog.String("entry_url", entry.URL),
++		)
++
++		if err := c.makeRequest(message); err != nil {
++			return err
++		}
++	}
++
++	return nil
++}
++
++func (c *Client) makeRequest(payload *gotifyMessage) error {
++	requestBody, err := json.Marshal(payload)
++	if err != nil {
++		return fmt.Errorf("gotify: unable to encode request body: %v", err)
++	}
++
++	endpoint := strings.TrimRight(c.gotifyURL, "/") + "/message"
++	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(requestBody))
++	if err != nil {
++		return fmt.Errorf("gotify: unable to create request: %v", err)
++	}
++
++	request.Header.Set("Content-Type", "application/json")
++	request.Header.Set("User-Agent", "Miniflux/"+version.Version)
++	// The token is sent in a header rather than the query string to keep it out of logs.
++	request.Header.Set("X-Gotify-Key", c.gotifyToken)
++
++	httpClient := client.NewClientWithOptions(client.Options{Timeout: defaultClientTimeout, BlockPrivateNetworks: !config.Opts.IntegrationAllowPrivateNetworks()})
++	response, err := httpClient.Do(request)
++	if err != nil {
++		return fmt.Errorf("gotify: unable to send request: %v", err)
++	}
++	defer response.Body.Close()
++
++	if response.StatusCode >= 400 {
++		return fmt.Errorf("gotify: incorrect response status code %d for url %s", response.StatusCode, redactedURL(endpoint))
++	}
++
++	return nil
++}
++
++// redactedURL strips any credentials from the URL before it is logged.
++func redactedURL(rawURL string) string {
++	u, err := url.Parse(rawURL)
++	if err != nil {
++		return ""
++	}
++	return u.Redacted()
++}
++
++// See https://gotify.net/docs/pushmsg and https://gotify.net/docs/msgextras
++type gotifyMessage struct {
++	Title    string `json:"title"`
++	Message  string `json:"message"`
++	Priority int    `json:"priority"`
++	Extras   struct {
++		ClientNotification struct {
++			Click struct {
++				URL string `json:"url"`
++			} `json:"click"`
++		} `json:"client::notification"`
++	} `json:"extras"`
++}
+diff --git a/internal/integration/integration.go b/internal/integration/integration.go
+index 5606aab6..1da969d9 100644
+--- a/internal/integration/integration.go
++++ b/internal/integration/integration.go
+@@ -12,6 +12,7 @@ import (
+ 	"miniflux.app/v2/internal/integration/cubox"
+ 	"miniflux.app/v2/internal/integration/discord"
+ 	"miniflux.app/v2/internal/integration/espial"
++	"miniflux.app/v2/internal/integration/gotify"
+ 	"miniflux.app/v2/internal/integration/instapaper"
+ 	"miniflux.app/v2/internal/integration/karakeep"
+ 	"miniflux.app/v2/internal/integration/linkace"
+@@ -588,6 +589,24 @@ func PushEntries(feed *model.Feed, entries model.Entries, userIntegrations *mode
+ 		}
+ 	}
+ 
++	if userIntegrations.GotifyEnabled {
++		slog.Debug("Sending new entries to Gotify",
++			slog.Int64("user_id", userIntegrations.UserID),
++			slog.Int("nb_entries", len(entries)),
++			slog.Int64("feed_id", feed.ID),
++		)
++
++		client := gotify.NewClient(
++			userIntegrations.GotifyURL,
++			userIntegrations.GotifyToken,
++			userIntegrations.GotifyPriority,
++		)
++
++		if err := client.SendMessages(feed, entries); err != nil {
++			slog.Warn("Unable to send new entries to Gotify", slog.Any("error", err))
++		}
++	}
++
+ 	if userIntegrations.AppriseEnabled {
+ 		slog.Debug("Sending new entries to Apprise",
+ 			slog.Int64("user_id", userIntegrations.UserID),
+diff --git a/internal/locale/translations/ar_SA.json b/internal/locale/translations/ar_SA.json
+index d779ebd8..5b5ffbcb 100644
+--- a/internal/locale/translations/ar_SA.json
++++ b/internal/locale/translations/ar_SA.json
+@@ -252,6 +252,10 @@
+     "form.integration.googlereader_endpoint": "نقطة نهاية Google Reader API:",
+     "form.integration.googlereader_password": "كلمة مرور Google Reader",
+     "form.integration.googlereader_username": "اسم مستخدم Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "حفظ المقالات في Instapaper",
+     "form.integration.instapaper_password": "كلمة مرور Instapaper",
+     "form.integration.instapaper_username": "اسم مستخدم Instapaper",
+diff --git a/internal/locale/translations/de_DE.json b/internal/locale/translations/de_DE.json
+index 46068777..e2f9158c 100644
+--- a/internal/locale/translations/de_DE.json
++++ b/internal/locale/translations/de_DE.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Google-Reader-API-Endpunkt:",
+     "form.integration.googlereader_password": "Google-Reader-Passwort",
+     "form.integration.googlereader_username": "Google-Reader-Benutzername",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Artikel in Instapaper speichern",
+     "form.integration.instapaper_password": "Instapaper-Passwort",
+     "form.integration.instapaper_username": "Instapaper-Benutzername",
+diff --git a/internal/locale/translations/el_EL.json b/internal/locale/translations/el_EL.json
+index fee77a6a..866ef508 100644
+--- a/internal/locale/translations/el_EL.json
++++ b/internal/locale/translations/el_EL.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Τελικό σημείο Google Reader API:",
+     "form.integration.googlereader_password": "Κωδικός Πρόσβασης Google Reader",
+     "form.integration.googlereader_username": "Όνομα Χρήστη Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Αποθήκευση άρθρων στο Instapaper",
+     "form.integration.instapaper_password": "Κωδικός Πρόσβασης Instapaper",
+     "form.integration.instapaper_username": "Όνομα Χρήστη Instapaper",
+diff --git a/internal/locale/translations/en_US.json b/internal/locale/translations/en_US.json
+index f423e952..fa581fd4 100644
+--- a/internal/locale/translations/en_US.json
++++ b/internal/locale/translations/en_US.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Google Reader API endpoint:",
+     "form.integration.googlereader_password": "Google Reader Password",
+     "form.integration.googlereader_username": "Google Reader Username",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Save entries to Instapaper",
+     "form.integration.instapaper_password": "Instapaper Password",
+     "form.integration.instapaper_username": "Instapaper Username",
+diff --git a/internal/locale/translations/es_ES.json b/internal/locale/translations/es_ES.json
+index 9eb1d928..d35c72ac 100644
+--- a/internal/locale/translations/es_ES.json
++++ b/internal/locale/translations/es_ES.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Acceso API de Google Reader:",
+     "form.integration.googlereader_password": "Contraseña de Google Reader",
+     "form.integration.googlereader_username": "Nombre de usuario de Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Enviar artículos a Instapaper",
+     "form.integration.instapaper_password": "Contraseña de Instapaper",
+     "form.integration.instapaper_username": "Nombre de usuario de Instapaper",
+diff --git a/internal/locale/translations/fi_FI.json b/internal/locale/translations/fi_FI.json
+index 20e240b7..3a640ede 100644
+--- a/internal/locale/translations/fi_FI.json
++++ b/internal/locale/translations/fi_FI.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Google Reader API -päätepiste:",
+     "form.integration.googlereader_password": "Google-lukijan salasana",
+     "form.integration.googlereader_username": "Google-lukijan käyttäjätunnus",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Tallenna artikkelit Instapaperiin",
+     "form.integration.instapaper_password": "Instapaper-salasana",
+     "form.integration.instapaper_username": "Instapaper-käyttäjätunnus",
+diff --git a/internal/locale/translations/fr_FR.json b/internal/locale/translations/fr_FR.json
+index 6f02344e..8be15269 100644
+--- a/internal/locale/translations/fr_FR.json
++++ b/internal/locale/translations/fr_FR.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Point de terminaison de l'API Google Reader :",
+     "form.integration.googlereader_password": "Mot de passe pour l'API de Google Reader",
+     "form.integration.googlereader_username": "Nom d'utilisateur pour l'API de Google Reader",
++    "form.integration.gotify_activate": "Envoyer les nouveaux articles vers Gotify",
++    "form.integration.gotify_priority": "Priorité Gotify (0-10, 5 par défaut)",
++    "form.integration.gotify_token": "Jeton d'application Gotify",
++    "form.integration.gotify_url": "URL du serveur Gotify",
+     "form.integration.instapaper_activate": "Sauvegarder les articles vers Instapaper",
+     "form.integration.instapaper_password": "Mot de passe Instapaper",
+     "form.integration.instapaper_username": "Nom d'utilisateur Instapaper",
+diff --git a/internal/locale/translations/gl_ES.json b/internal/locale/translations/gl_ES.json
+index f1b8050f..30529045 100644
+--- a/internal/locale/translations/gl_ES.json
++++ b/internal/locale/translations/gl_ES.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Punto de acceso de Google Reader API:",
+     "form.integration.googlereader_password": "Contrasinal Google Reader",
+     "form.integration.googlereader_username": "Identificador Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Gardar entradas en Instapaper",
+     "form.integration.instapaper_password": "Contrasinal Instapaper",
+     "form.integration.instapaper_username": "Identificador Instapaper",
+diff --git a/internal/locale/translations/hi_IN.json b/internal/locale/translations/hi_IN.json
+index 1bb01b97..c636939f 100644
+--- a/internal/locale/translations/hi_IN.json
++++ b/internal/locale/translations/hi_IN.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "गूगल रीडर एपीआई समापन बिंदु:",
+     "form.integration.googlereader_password": "गूगल रीडर पासवर्ड",
+     "form.integration.googlereader_username": "गूगल रीडर उपयोगकर्ता नाम",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "विषय-वस्तु को इंस्टापेपर में सहेजें",
+     "form.integration.instapaper_password": "इंस्टापेपर पासवर्ड",
+     "form.integration.instapaper_username": "इंस्टापेपर यूजरनेम",
+diff --git a/internal/locale/translations/id_ID.json b/internal/locale/translations/id_ID.json
+index e27cd0d7..ed616c9d 100644
+--- a/internal/locale/translations/id_ID.json
++++ b/internal/locale/translations/id_ID.json
+@@ -237,6 +237,10 @@
+     "form.integration.googlereader_endpoint": "Titik URL API Google Reader:",
+     "form.integration.googlereader_password": "Kata Sandi Google Reader",
+     "form.integration.googlereader_username": "Nama Pengguna Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Simpan artikel ke Instapaper",
+     "form.integration.instapaper_password": "Kata Sandi Instapaper",
+     "form.integration.instapaper_username": "Nama Pengguna Instapaper",
+diff --git a/internal/locale/translations/it_IT.json b/internal/locale/translations/it_IT.json
+index 1f6a03fb..f665e8d1 100644
+--- a/internal/locale/translations/it_IT.json
++++ b/internal/locale/translations/it_IT.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Endpoint dell'API di Google Reader:",
+     "form.integration.googlereader_password": "Password dell'account Google Reader",
+     "form.integration.googlereader_username": "Nome utente dell'account Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Salva gli articoli su Instapaper",
+     "form.integration.instapaper_password": "Password dell'account Instapaper",
+     "form.integration.instapaper_username": "Nome utente dell'account Instapaper",
+diff --git a/internal/locale/translations/ja_JP.json b/internal/locale/translations/ja_JP.json
+index c31249e8..bb548b28 100644
+--- a/internal/locale/translations/ja_JP.json
++++ b/internal/locale/translations/ja_JP.json
+@@ -237,6 +237,10 @@
+     "form.integration.googlereader_endpoint": "Google Reader APIエンドポイント:",
+     "form.integration.googlereader_password": "Google Reader のパスワード",
+     "form.integration.googlereader_username": "Google Reader のユーザー名",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Instapaper に記事を保存する",
+     "form.integration.instapaper_password": "Instapaper のパスワード",
+     "form.integration.instapaper_username": "Instapaper のユーザー名",
+diff --git a/internal/locale/translations/ko_KR.json b/internal/locale/translations/ko_KR.json
+index 285904ec..fd6b9e4a 100644
+--- a/internal/locale/translations/ko_KR.json
++++ b/internal/locale/translations/ko_KR.json
+@@ -237,6 +237,10 @@
+     "form.integration.googlereader_endpoint": "Google Reader API 엔드포인트:",
+     "form.integration.googlereader_password": "Google Reader 비밀번호",
+     "form.integration.googlereader_username": "Google Reader 사용자명",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Instapaper에 게시물 저장",
+     "form.integration.instapaper_password": "Instapaper 비밀번호",
+     "form.integration.instapaper_username": "Instapaper 사용자명",
+diff --git a/internal/locale/translations/nan_Latn_pehoeji.json b/internal/locale/translations/nan_Latn_pehoeji.json
+index 75ca826e..19014f98 100644
+--- a/internal/locale/translations/nan_Latn_pehoeji.json
++++ b/internal/locale/translations/nan_Latn_pehoeji.json
+@@ -237,6 +237,10 @@
+     "form.integration.googlereader_endpoint": "Google Reader API thâu：",
+     "form.integration.googlereader_password": "Google Reader bi̍t-bé",
+     "form.integration.googlereader_username": "Google Reader Kháu-chō miâ",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Pó-chûn siau-sit kàu Instapaper",
+     "form.integration.instapaper_password": "Instapaper bi̍t-bé",
+     "form.integration.instapaper_username": "Instapaper Kháu-chō miâ",
+diff --git a/internal/locale/translations/nl_NL.json b/internal/locale/translations/nl_NL.json
+index c7ba53af..4e38c012 100644
+--- a/internal/locale/translations/nl_NL.json
++++ b/internal/locale/translations/nl_NL.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Google Reader API-endpoint:",
+     "form.integration.googlereader_password": "Google Reader wachtwoord",
+     "form.integration.googlereader_username": "Google Reader gebruikersnaam",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Artikelen opslaan in Instapaper",
+     "form.integration.instapaper_password": "Instapaper wachtwoord",
+     "form.integration.instapaper_username": "Instapaper gebruikersnaam",
+diff --git a/internal/locale/translations/pl_PL.json b/internal/locale/translations/pl_PL.json
+index e40e9ce5..38c3716c 100644
+--- a/internal/locale/translations/pl_PL.json
++++ b/internal/locale/translations/pl_PL.json
+@@ -243,6 +243,10 @@
+     "form.integration.googlereader_endpoint": "Punkt końcowy API Google Reader:",
+     "form.integration.googlereader_password": "Hasło do Google Reader",
+     "form.integration.googlereader_username": "Login do Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Zapisuj wpisy w Instapaper",
+     "form.integration.instapaper_password": "Hasło do Instapaper",
+     "form.integration.instapaper_username": "Login do Instapaper",
+diff --git a/internal/locale/translations/pt_BR.json b/internal/locale/translations/pt_BR.json
+index f7bd3333..b0666c99 100644
+--- a/internal/locale/translations/pt_BR.json
++++ b/internal/locale/translations/pt_BR.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Endpoint da API do Google Reader:",
+     "form.integration.googlereader_password": "Senha do Google Reader",
+     "form.integration.googlereader_username": "Nome de usuário do Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Salvar itens no Instapaper",
+     "form.integration.instapaper_password": "Senha do Instapaper",
+     "form.integration.instapaper_username": "Nome do usuário do Instapaper",
+diff --git a/internal/locale/translations/ro_RO.json b/internal/locale/translations/ro_RO.json
+index 17f5998d..c85b911f 100644
+--- a/internal/locale/translations/ro_RO.json
++++ b/internal/locale/translations/ro_RO.json
+@@ -243,6 +243,10 @@
+     "form.integration.googlereader_endpoint": "Punct acces API Google Reader:",
+     "form.integration.googlereader_password": "Parolă Google Reader",
+     "form.integration.googlereader_username": "Utilizator Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Salvează înregistrările pe Instapaper",
+     "form.integration.instapaper_password": "Parolă Instapaper",
+     "form.integration.instapaper_username": "Utilizator Instapaper",
+diff --git a/internal/locale/translations/ru_RU.json b/internal/locale/translations/ru_RU.json
+index 535501fd..781619c0 100644
+--- a/internal/locale/translations/ru_RU.json
++++ b/internal/locale/translations/ru_RU.json
+@@ -243,6 +243,10 @@
+     "form.integration.googlereader_endpoint": "Конечная точка Google Reader API:",
+     "form.integration.googlereader_password": "Пароль Google Reader",
+     "form.integration.googlereader_username": "Имя пользователя Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Сохранять статьи в Instapaper",
+     "form.integration.instapaper_password": "Пароль Instapaper",
+     "form.integration.instapaper_username": "Имя пользователя Instapaper",
+diff --git a/internal/locale/translations/tr_TR.json b/internal/locale/translations/tr_TR.json
+index 9d55d911..b9ef58fd 100644
+--- a/internal/locale/translations/tr_TR.json
++++ b/internal/locale/translations/tr_TR.json
+@@ -240,6 +240,10 @@
+     "form.integration.googlereader_endpoint": "Google Reader API uç noktası:",
+     "form.integration.googlereader_password": "Google Reader Parolası",
+     "form.integration.googlereader_username": "Google Reader Kullanıcı Adı",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Makaleleri Instapaper'a kaydet",
+     "form.integration.instapaper_password": "Instapaper Parolası",
+     "form.integration.instapaper_username": "Instapaper Kullanıcı Adı",
+diff --git a/internal/locale/translations/uk_UA.json b/internal/locale/translations/uk_UA.json
+index 491a3edd..5ab2bd18 100644
+--- a/internal/locale/translations/uk_UA.json
++++ b/internal/locale/translations/uk_UA.json
+@@ -243,6 +243,10 @@
+     "form.integration.googlereader_endpoint": "Адреса доступу API Google Reader:",
+     "form.integration.googlereader_password": "Пароль Google Reader",
+     "form.integration.googlereader_username": "Ім’я користувача Google Reader",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "Зберігати статті до Instapaper",
+     "form.integration.instapaper_password": "Пароль Instapaper",
+     "form.integration.instapaper_username": "Ім’я користувача Instapaper",
+diff --git a/internal/locale/translations/zh_CN.json b/internal/locale/translations/zh_CN.json
+index a67ec73c..0c13c0d0 100644
+--- a/internal/locale/translations/zh_CN.json
++++ b/internal/locale/translations/zh_CN.json
+@@ -237,6 +237,10 @@
+     "form.integration.googlereader_endpoint": "Google Reader API 端点：",
+     "form.integration.googlereader_password": "Google Reader 密码",
+     "form.integration.googlereader_username": "Google Reader 用户名",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "保存条目到 Instapaper",
+     "form.integration.instapaper_password": "Instapaper 密码",
+     "form.integration.instapaper_username": "Instapaper 用户名",
+diff --git a/internal/locale/translations/zh_TW.json b/internal/locale/translations/zh_TW.json
+index 507ce2f2..923da317 100644
+--- a/internal/locale/translations/zh_TW.json
++++ b/internal/locale/translations/zh_TW.json
+@@ -237,6 +237,10 @@
+     "form.integration.googlereader_endpoint": "Google Reader API 端點：",
+     "form.integration.googlereader_password": "Google Reader 密碼",
+     "form.integration.googlereader_username": "Google Reader 使用者名稱",
++    "form.integration.gotify_activate": "Push entries to Gotify",
++    "form.integration.gotify_priority": "Gotify priority (0-10, default is 5)",
++    "form.integration.gotify_token": "Gotify application token",
++    "form.integration.gotify_url": "Gotify server URL",
+     "form.integration.instapaper_activate": "儲存文章到 Instapaper",
+     "form.integration.instapaper_password": "Instapaper 密碼",
+     "form.integration.instapaper_username": "Instapaper 使用者名稱",
+diff --git a/internal/model/integration.go b/internal/model/integration.go
+index b523bc93..f3fe4f85 100644
+--- a/internal/model/integration.go
++++ b/internal/model/integration.go
+@@ -127,4 +127,8 @@ type Integration struct {
+ 	PushoverDevice                   string
+ 	PushoverPrefix                   string
+ 	ArchiveorgEnabled                bool
++	GotifyEnabled                    bool
++	GotifyURL                        string
++	GotifyToken                      string
++	GotifyPriority                   int
+ }
+diff --git a/internal/storage/integration.go b/internal/storage/integration.go
+index a68e3d33..133d9885 100644
+--- a/internal/storage/integration.go
++++ b/internal/storage/integration.go
+@@ -231,7 +231,11 @@ func (s *Storage) Integration(userID int64) (*model.Integration, error) {
+ 			linktaco_org_slug,
+ 			linktaco_tags,
+ 			linktaco_visibility,
+-			archiveorg_enabled
++			archiveorg_enabled,
++			gotify_enabled,
++			gotify_url,
++			gotify_token,
++			gotify_priority
+ 		FROM
+ 			integrations
+ 		WHERE
+@@ -361,6 +365,10 @@ func (s *Storage) Integration(userID int64) (*model.Integration, error) {
+ 		&integration.LinktacoTags,
+ 		&integration.LinktacoVisibility,
+ 		&integration.ArchiveorgEnabled,
++		&integration.GotifyEnabled,
++		&integration.GotifyURL,
++		&integration.GotifyToken,
++		&integration.GotifyPriority,
+ 	)
+ 	switch {
+ 	case errors.Is(err, sql.ErrNoRows):
+@@ -498,9 +506,13 @@ func (s *Storage) UpdateIntegration(integration *model.Integration) error {
+ 			linktaco_visibility=$118,
+ 			archiveorg_enabled=$119,
+ 			linkwarden_collection_id=$120,
+-			readeck_push_enabled=$121
++			readeck_push_enabled=$121,
++			gotify_enabled=$122,
++			gotify_url=$123,
++			gotify_token=$124,
++			gotify_priority=$125
+ 		WHERE
+-			user_id=$122
++			user_id=$126
+ 	`
+ 	_, err := s.db.Exec(
+ 		query,
+@@ -625,6 +637,10 @@ func (s *Storage) UpdateIntegration(integration *model.Integration) error {
+ 		integration.ArchiveorgEnabled,
+ 		integration.LinkwardenCollectionID,
+ 		integration.ReadeckPushEnabled,
++		integration.GotifyEnabled,
++		integration.GotifyURL,
++		integration.GotifyToken,
++		integration.GotifyPriority,
+ 		integration.UserID,
+ 	)
+ 
+diff --git a/internal/template/templates/views/integrations.html b/internal/template/templates/views/integrations.html
+index ca51f5f7..d05a4f69 100644
+--- a/internal/template/templates/views/integrations.html
++++ b/internal/template/templates/views/integrations.html
+@@ -372,6 +372,28 @@
+         </div>
+     </details>
+ 
++    <details {{ if .form.GotifyEnabled }}open{{ end }}>
++        <summary>Gotify</summary>
++        <div class="form-section">
++            <label>
++                <input type="checkbox" name="gotify_enabled" value="1" {{ if .form.GotifyEnabled }}checked{{ end }}> {{ t "form.integration.gotify_activate" }}
++            </label>
++
++            <label for="form-gotify-url">{{ t "form.integration.gotify_url" }}</label>
++            <input type="url" name="gotify_url" id="form-gotify-url" value="{{ .form.GotifyURL }}" placeholder="https://gotify.example.org" spellcheck="false">
++
++            <label for="form-gotify-token">{{ t "form.integration.gotify_token" }}</label>
++            <input type="text" name="gotify_token" id="form-gotify-token" value="{{ .form.GotifyToken }}" spellcheck="false">
++
++            <label for="form-gotify-priority">{{ t "form.integration.gotify_priority" }}</label>
++            <input type="number" name="gotify_priority" id="form-gotify-priority" value="{{ .form.GotifyPriority }}" min="0" max="10">
++
++            <div class="buttons">
++                <button type="submit" class="button button-primary" data-label-loading="{{ t "form.submit.saving" }}">{{ t "action.update" }}</button>
++            </div>
++        </div>
++    </details>
++
+     <details {{ if .form.NunuxKeeperEnabled }}open{{ end }}>
+         <summary>Nunux Keeper</summary>
+         <div class="form-section">
+diff --git a/internal/ui/form/integration.go b/internal/ui/form/integration.go
+index a41c26dd..4563100b 100644
+--- a/internal/ui/form/integration.go
++++ b/internal/ui/form/integration.go
+@@ -134,6 +134,10 @@ type IntegrationForm struct {
+ 	PushoverDevice                   string
+ 	PushoverPrefix                   string
+ 	ArchiveorgEnabled                bool
++	GotifyEnabled                    bool
++	GotifyURL                        string
++	GotifyToken                      string
++	GotifyPriority                   int
+ }
+ 
+ // Merge copy form values to the model.
+@@ -256,6 +260,10 @@ func (i IntegrationForm) Merge(integration *model.Integration) {
+ 	integration.PushoverDevice = i.PushoverDevice
+ 	integration.PushoverPrefix = i.PushoverPrefix
+ 	integration.ArchiveorgEnabled = i.ArchiveorgEnabled
++	integration.GotifyEnabled = i.GotifyEnabled
++	integration.GotifyURL = i.GotifyURL
++	integration.GotifyToken = i.GotifyToken
++	integration.GotifyPriority = i.GotifyPriority
+ }
+ 
+ // ValidateGoogleReader ensures the Google Reader integration is not enabled without credentials.
+@@ -271,6 +279,11 @@ func (i IntegrationForm) ValidateGoogleReader(storedPasswordHash string) *locale
+ 
+ // NewIntegrationForm returns a new IntegrationForm.
+ func NewIntegrationForm(r *http.Request) *IntegrationForm {
++	gotifyPriority, err := strconv.Atoi(r.FormValue("gotify_priority"))
++	if err != nil || gotifyPriority < 0 || gotifyPriority > 10 {
++		gotifyPriority = 5
++	}
++
+ 	return &IntegrationForm{
+ 		PinboardEnabled:                  r.FormValue("pinboard_enabled") == "1",
+ 		PinboardToken:                    r.FormValue("pinboard_token"),
+@@ -392,6 +405,10 @@ func NewIntegrationForm(r *http.Request) *IntegrationForm {
+ 		PushoverDevice:                   r.FormValue("pushover_device"),
+ 		PushoverPrefix:                   r.FormValue("pushover_prefix"),
+ 		ArchiveorgEnabled:                r.FormValue("archiveorg_enabled") == "1",
++		GotifyEnabled:                    r.FormValue("gotify_enabled") == "1",
++		GotifyURL:                        r.FormValue("gotify_url"),
++		GotifyToken:                      r.FormValue("gotify_token"),
++		GotifyPriority:                   gotifyPriority,
+ 	}
+ }
+ 
+diff --git a/internal/ui/integration_show.go b/internal/ui/integration_show.go
+index f271367d..34779ae4 100644
+--- a/internal/ui/integration_show.go
++++ b/internal/ui/integration_show.go
+@@ -145,6 +145,10 @@ func (h *handler) showIntegrationPage(w http.ResponseWriter, r *http.Request) {
+ 		PushoverDevice:                   integration.PushoverDevice,
+ 		PushoverPrefix:                   integration.PushoverPrefix,
+ 		ArchiveorgEnabled:                integration.ArchiveorgEnabled,
++		GotifyEnabled:                    integration.GotifyEnabled,
++		GotifyURL:                        integration.GotifyURL,
++		GotifyToken:                      integration.GotifyToken,
++		GotifyPriority:                   integration.GotifyPriority,
+ 	}
+ 
+ 	view := view.New(h.tpl, r)

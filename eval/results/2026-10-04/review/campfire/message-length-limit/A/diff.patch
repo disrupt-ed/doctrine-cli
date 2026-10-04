@@ -1,0 +1,160 @@
+diff --git a/app/assets/stylesheets/composer.css b/app/assets/stylesheets/composer.css
+index dc01aed..865659d 100644
+--- a/app/assets/stylesheets/composer.css
++++ b/app/assets/stylesheets/composer.css
+@@ -13,6 +13,18 @@
+   }
+ }
+ 
++/* Character counter */
++.composer__counter {
++  align-self: center;
++  color: var(--color-text-lighter, currentColor);
++  font-variant-numeric: tabular-nums;
++
++  &[data-over-limit] {
++    color: var(--color-negative, red);
++    font-weight: bold;
++  }
++}
++
+ /* Attachments */
+ .composer__attachment-btn {
+   --hover-filter: brightness(0.85);
+diff --git a/app/javascript/controllers/composer_controller.js b/app/javascript/controllers/composer_controller.js
+index 104e319..b451b43 100644
+--- a/app/javascript/controllers/composer_controller.js
++++ b/app/javascript/controllers/composer_controller.js
+@@ -5,7 +5,7 @@ import { escapeHTML } from "helpers/string_helpers"
+ 
+ export default class extends Controller {
+   static classes = ["toolbar"]
+-  static targets = [ "clientid", "fields", "fileList", "text" ]
++  static targets = [ "clientid", "counter", "fields", "fileList", "text" ]
+   static values = { roomId: Number }
+   static outlets = [ "messages" ]
+ 
+@@ -20,6 +20,8 @@ export default class extends Controller {
+   }
+ 
+   saveDraft() {
++    this.#updateCounter()
++
+     if (this.textTarget.isBlank) {
+       localStorage.removeItem(this.#draftKey)
+     } else {
+@@ -55,6 +57,7 @@ export default class extends Controller {
+ 
+   replaceMessageContent(content) {
+     this.textTarget.value = content
++    this.#updateCounter()
+     this.textTarget.focus()
+     this.textTarget.selection.placeCursorAtTheEnd()
+   }
+@@ -123,9 +126,27 @@ export default class extends Controller {
+     if (draft) {
+       this.textTarget.value = draft
+       this.textTarget.selection.placeCursorAtTheEnd()
++      this.#updateCounter()
+     }
+   }
+ 
++  get #textLength() {
++    const html = new DOMParser().parseFromString(this.textTarget.value, "text/html")
++    return html.body.textContent.length
++  }
++
++  get #maxLength() {
++    return Number(this.counterTarget.dataset.maxLength)
++  }
++
++  #updateCounter() {
++    const length = this.#textLength
++
++    this.counterTarget.hidden = length === 0
++    this.counterTarget.textContent = `${length} / ${this.#maxLength}`
++    this.counterTarget.toggleAttribute("data-over-limit", length > this.#maxLength)
++  }
++
+   get #draftKey() {
+     return `composer-draft-${this.roomIdValue}`
+   }
+@@ -148,7 +169,7 @@ export default class extends Controller {
+   }
+ 
+   #validInput() {
+-    return !this.textTarget.isBlank
++    return !this.textTarget.isBlank && this.#textLength <= this.#maxLength
+   }
+ 
+   async #submitFiles() {
+@@ -181,6 +202,7 @@ export default class extends Controller {
+ 
+   #reset() {
+     this.textTarget.value = ""
++    this.#updateCounter()
+     localStorage.removeItem(this.#draftKey)
+   }
+ 
+diff --git a/app/models/message.rb b/app/models/message.rb
+index e607f6a..04764f3 100644
+--- a/app/models/message.rb
++++ b/app/models/message.rb
+@@ -8,6 +8,10 @@ class Message < ApplicationRecord
+ 
+   has_rich_text :body
+ 
++  MAX_BODY_LENGTH = 5_000
++
++  validate :body_within_length_limit
++
+   before_create -> { self.client_message_id ||= Random.uuid } # Bots don't care
+   after_create_commit -> { room.receive(self) }
+ 
+@@ -41,4 +45,11 @@ class Message < ApplicationRecord
+       Sound.find_by_name match[:name]
+     end
+   end
++
++  private
++    def body_within_length_limit
++      if body.to_plain_text.length > MAX_BODY_LENGTH
++        errors.add :body, :too_long, count: MAX_BODY_LENGTH
++      end
++    end
+ end
+diff --git a/app/views/rooms/show/_composer.html.erb b/app/views/rooms/show/_composer.html.erb
+index 43f961c..f08abb9 100644
+--- a/app/views/rooms/show/_composer.html.erb
++++ b/app/views/rooms/show/_composer.html.erb
+@@ -31,6 +31,9 @@
+                   <% end %>
+                 </div>
+ 
++                <span class="composer__counter txt-small flex-item-no-shrink" data-composer-target="counter"
++                      data-max-length="<%= Message::MAX_BODY_LENGTH %>" aria-live="polite" hidden></span>
++
+                 <label class="btn btn--borderless txt-small flex-item-no-shrink composer__attachment-btn input--file">
+                   <%= image_tag "attachment.svg", size: 22, class: "colorize--black", aria: { hidden: "true" } %>
+                   <input type="file" data-action="composer#filePicked" multiple />
+diff --git a/test/models/message_test.rb b/test/models/message_test.rb
+index 3cd12c1..2c79e79 100644
+--- a/test/models/message_test.rb
++++ b/test/models/message_test.rb
+@@ -27,6 +27,16 @@ class MessageTest < ActiveSupport::TestCase
+     assert_equal [], message_mentioning_a_non_member.mentionees
+   end
+ 
++  test "body is limited to #{Message::MAX_BODY_LENGTH} characters" do
++    room = rooms(:designers)
++
++    assert room.messages.build(creator: users(:jason), body: "a" * Message::MAX_BODY_LENGTH).valid?
++
++    message = room.messages.build(creator: users(:jason), body: "a" * (Message::MAX_BODY_LENGTH + 1))
++    assert_not message.valid?
++    assert message.errors.of_kind?(:body, :too_long)
++  end
++
+   private
+     def create_new_message_in(room)
+       room.messages.create!(creator: users(:jason), body: "Hello", client_message_id: "123")

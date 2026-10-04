@@ -1,0 +1,48 @@
+diff --git a/internal/api/api.go b/internal/api/api.go
+index 3cf8f75d..bad31187 100644
+--- a/internal/api/api.go
++++ b/internal/api/api.go
+@@ -63,6 +63,7 @@ func NewHandler(store *storage.Storage, pool *worker.Pool) http.Handler {
+ 	mux.HandleFunc("PUT /v1/entries/{entryID}/star", handler.toggleStarredHandler)
+ 	mux.HandleFunc("POST /v1/entries/{entryID}/save", handler.saveEntryHandler)
+ 	mux.HandleFunc("GET /v1/entries/{entryID}/fetch-content", handler.fetchContentHandler)
++	mux.HandleFunc("GET /v1/entries/{entryID}/enclosures", handler.getEntryEnclosuresHandler)
+ 	mux.HandleFunc("PUT /v1/flush-history", handler.flushHistoryHandler)
+ 	mux.HandleFunc("DELETE /v1/flush-history", handler.flushHistoryHandler)
+ 	mux.HandleFunc("GET /v1/icons/{iconID}", handler.getIconByIconIDHandler)
+diff --git a/internal/api/enclosure_handlers.go b/internal/api/enclosure_handlers.go
+index 9445f308..024e8e1a 100644
+--- a/internal/api/enclosure_handlers.go
++++ b/internal/api/enclosure_handlers.go
+@@ -15,6 +15,31 @@ import (
+ 	"miniflux.app/v2/internal/validator"
+ )
+ 
++func (h *handler) getEntryEnclosuresHandler(w http.ResponseWriter, r *http.Request) {
++	entryID := request.RouteInt64Param(r, "entryID")
++	if entryID == 0 {
++		response.JSONBadRequest(w, r, errors.New("invalid entry ID"))
++		return
++	}
++
++	entry, err := h.store.NewEntryQueryBuilder(request.UserID(r)).
++		WithEntryIDs(entryID).
++		GetEntry()
++	if err != nil {
++		response.JSONServerError(w, r, err)
++		return
++	}
++
++	if entry == nil {
++		response.JSONNotFound(w, r)
++		return
++	}
++
++	entry.Enclosures.ProxifyEnclosureURL(config.Opts.MediaProxyMode(), config.Opts.MediaProxyResourceTypes())
++
++	response.JSON(w, r, entry.Enclosures)
++}
++
+ func (h *handler) getEnclosureByIDHandler(w http.ResponseWriter, r *http.Request) {
+ 	enclosureID := request.RouteInt64Param(r, "enclosureID")
+ 	if enclosureID == 0 {

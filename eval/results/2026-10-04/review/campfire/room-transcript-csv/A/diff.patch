@@ -1,0 +1,134 @@
+diff --git a/Gemfile b/Gemfile
+index 1b1cf4a..29b6dc5 100644
+--- a/Gemfile
++++ b/Gemfile
+@@ -6,6 +6,7 @@ git_source(:github) { |repo| "https://github.com/#{repo}.git" }
+ gem "rails", github: "rails/rails", branch: "main"
+ gem "ostruct"
+ gem "benchmark"
++gem "csv"
+ 
+ # Drivers
+ gem "sqlite3"
+diff --git a/app/controllers/rooms/transcripts_controller.rb b/app/controllers/rooms/transcripts_controller.rb
+new file mode 100644
+index 0000000..a2383cf
+--- /dev/null
++++ b/app/controllers/rooms/transcripts_controller.rb
+@@ -0,0 +1,11 @@
++class Rooms::TranscriptsController < ApplicationController
++  include RoomScoped
++
++  def show
++    respond_to do |format|
++      format.csv do
++        send_data @room.messages.to_csv, type: "text/csv", filename: "#{@room.name.to_s.parameterize.presence || "room"}-transcript.csv"
++      end
++    end
++  end
++end
+diff --git a/app/models/message.rb b/app/models/message.rb
+index e607f6a..56bc450 100644
+--- a/app/models/message.rb
++++ b/app/models/message.rb
+@@ -1,5 +1,5 @@
+ class Message < ApplicationRecord
+-  include Attachment, Broadcasts, Mentionee, Pagination, Searchable
++  include Attachment, Broadcasts, Mentionee, Pagination, Searchable, Transcript
+ 
+   belongs_to :room, touch: true
+   belongs_to :creator, class_name: "User", default: -> { Current.user }
+diff --git a/app/models/message/transcript.rb b/app/models/message/transcript.rb
+new file mode 100644
+index 0000000..6316339
+--- /dev/null
++++ b/app/models/message/transcript.rb
+@@ -0,0 +1,25 @@
++require "csv"
++
++module Message::Transcript
++  extend ActiveSupport::Concern
++
++  FORMULA_PREFIXES = %w[ = + - @ ].freeze
++
++  class_methods do
++    def to_csv
++      CSV.generate do |csv|
++        csv << %w[ sent_at author message ]
++
++        ordered.with_creator.with_attachment_details.find_each do |message|
++          csv << [ message.created_at.iso8601, message.creator.name, message.transcript_text ]
++        end
++      end
++    end
++  end
++
++  # Spreadsheets run cells starting with these characters as formulas, so defuse them.
++  def transcript_text
++    text = plain_text_body
++    text.start_with?(*FORMULA_PREFIXES, "\t", "\r") ? "'#{text}" : text
++  end
++end
+diff --git a/app/views/rooms/show/_nav.html.erb b/app/views/rooms/show/_nav.html.erb
+index 4f62185..e289c83 100644
+--- a/app/views/rooms/show/_nav.html.erb
++++ b/app/views/rooms/show/_nav.html.erb
+@@ -16,5 +16,10 @@
+     <span class="for-screen-reader">Settings for this <%= room.direct? ? "Ping" : "room" %></span>
+   <% end %>
+ 
++  <%= link_to room_transcript_path(room, format: :csv), class: "btn", data: { turbo: false } do %>
++    <%= image_tag "download.svg", size: 20, aria: { hidden: "true" } %>
++    <span class="for-screen-reader">Download this <%= room.direct? ? "Ping" : "room" %> as CSV</span>
++  <% end %>
++
+   <%= render "rooms/involvements/bell", room: room %>
+ <% end %>
+diff --git a/config/routes.rb b/config/routes.rb
+index cb9dd1a..8f44423 100644
+--- a/config/routes.rb
++++ b/config/routes.rb
+@@ -73,6 +73,7 @@ Rails.application.routes.draw do
+     scope module: "rooms" do
+       resource :refresh, only: :show
+       resource :settings, only: :show
++      resource :transcript, only: :show
+       resource :involvement, only: %i[ show update ]
+     end
+ 
+diff --git a/test/controllers/rooms/transcripts_controller_test.rb b/test/controllers/rooms/transcripts_controller_test.rb
+new file mode 100644
+index 0000000..54ee683
+--- /dev/null
++++ b/test/controllers/rooms/transcripts_controller_test.rb
+@@ -0,0 +1,30 @@
++require "test_helper"
++
++class Rooms::TranscriptsControllerTest < ActionDispatch::IntegrationTest
++  setup do
++    sign_in :david
++  end
++
++  test "member downloads the room's messages as CSV" do
++    room = rooms(:hq)
++    room.messages.create!(creator: users(:jason), body: "=HYPERLINK(\"http://example.com\")", client_message_id: "formula")
++
++    get room_transcript_url(room, format: :csv)
++
++    assert_response :success
++    assert_equal "text/csv", response.media_type
++
++    rows = CSV.parse(response.body, headers: true)
++    assert_equal %w[ sent_at author message ], rows.headers
++    assert_equal room.messages.count, rows.size
++    assert_includes rows.map { |row| row["message"] }, "'=HYPERLINK(\"http://example.com\")"
++  end
++
++  test "non-members can't download the transcript" do
++    room = Rooms::Closed.create_for({ name: "Secret" }, users: [ users(:jason) ])
++
++    get room_transcript_url(room, format: :csv)
++
++    assert_response :not_found
++  end
++end

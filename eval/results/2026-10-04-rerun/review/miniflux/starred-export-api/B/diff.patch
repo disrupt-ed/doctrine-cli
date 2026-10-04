@@ -1,0 +1,168 @@
+diff --git a/client/client.go b/client/client.go
+index 4f849064..51a30b83 100644
+--- a/client/client.go
++++ b/client/client.go
+@@ -633,6 +633,29 @@ func (c *Client) ExportContext(ctx context.Context) ([]byte, error) {
+ 	return opml, nil
+ }
+ 
++// ExportStarred exports all starred entries.
++func (c *Client) ExportStarred() (*EntryResultSet, error) {
++	ctx, cancel := withDefaultTimeout()
++	defer cancel()
++	return c.ExportStarredContext(ctx)
++}
++
++// ExportStarredContext exports all starred entries.
++func (c *Client) ExportStarredContext(ctx context.Context) (*EntryResultSet, error) {
++	body, err := c.request.Get(ctx, "/v1/export/starred")
++	if err != nil {
++		return nil, err
++	}
++	defer body.Close()
++
++	var result EntryResultSet
++	if err := json.NewDecoder(body).Decode(&result); err != nil {
++		return nil, fmt.Errorf("miniflux: response error (%v)", err)
++	}
++
++	return &result, nil
++}
++
+ // Import imports an OPML file.
+ func (c *Client) Import(f io.ReadCloser) error {
+ 	ctx, cancel := withDefaultTimeout()
+diff --git a/internal/api/api.go b/internal/api/api.go
+index 3cf8f75d..419716e9 100644
+--- a/internal/api/api.go
++++ b/internal/api/api.go
+@@ -50,6 +50,7 @@ func NewHandler(store *storage.Storage, pool *worker.Pool) http.Handler {
+ 	mux.HandleFunc("GET /v1/feeds/{feedID}/icon", handler.getIconByFeedIDHandler)
+ 	mux.HandleFunc("PUT /v1/feeds/{feedID}/mark-all-as-read", handler.markFeedAsReadHandler)
+ 	mux.HandleFunc("GET /v1/export", handler.exportFeedsHandler)
++	mux.HandleFunc("GET /v1/export/starred", handler.exportStarredEntriesHandler)
+ 	mux.HandleFunc("POST /v1/import", handler.importFeedsHandler)
+ 	mux.HandleFunc("GET /v1/feeds/{feedID}/entries", handler.getFeedEntriesHandler)
+ 	mux.HandleFunc("POST /v1/feeds/{feedID}/entries/import", handler.importFeedEntryHandler)
+diff --git a/internal/api/api_integration_test.go b/internal/api/api_integration_test.go
+index 498f7d14..c6c48a81 100644
+--- a/internal/api/api_integration_test.go
++++ b/internal/api/api_integration_test.go
+@@ -2320,6 +2320,61 @@ func TestExportEndpoint(t *testing.T) {
+ 	}
+ }
+ 
++func TestExportStarredEndpoint(t *testing.T) {
++	t.Parallel()
++
++	testConfig := newIntegrationTestConfig()
++	if !testConfig.isConfigured() {
++		t.Skip(skipIntegrationTestsMessage)
++	}
++
++	adminClient := miniflux.NewClient(testConfig.testBaseURL, testConfig.testAdminUsername, testConfig.testAdminPassword)
++
++	regularTestUser, err := adminClient.CreateUser(testConfig.genRandomUsername(), testConfig.testRegularPassword, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer adminClient.DeleteUser(regularTestUser.ID)
++
++	regularUserClient := miniflux.NewClient(testConfig.testBaseURL, regularTestUser.Username, testConfig.testRegularPassword)
++
++	result, err := regularUserClient.ExportStarred()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result.Total != 0 || len(result.Entries) != 0 {
++		t.Fatalf(`Expected no starred entries for a new user, got %d`, len(result.Entries))
++	}
++
++	if _, err := regularUserClient.CreateFeed(&miniflux.FeedCreationRequest{FeedURL: testConfig.testFeedURL}); err != nil {
++		t.Fatal(err)
++	}
++
++	entries, err := regularUserClient.Entries(&miniflux.Filter{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(entries.Entries) < 2 {
++		t.Fatalf(`Expected at least 2 entries, got %d`, len(entries.Entries))
++	}
++
++	starredID := entries.Entries[0].ID
++	if err := regularUserClient.ToggleStarred(starredID); err != nil {
++		t.Fatal(err)
++	}
++
++	result, err = regularUserClient.ExportStarred()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result.Total != 1 || len(result.Entries) != 1 {
++		t.Fatalf(`Expected 1 starred entry, got total=%d entries=%d`, result.Total, len(result.Entries))
++	}
++	if result.Entries[0].ID != starredID {
++		t.Fatalf(`Expected starred entry %d, got %d`, starredID, result.Entries[0].ID)
++	}
++}
++
+ func TestImportEndpoint(t *testing.T) {
+ 	t.Parallel()
+ 
+diff --git a/internal/api/api_test.go b/internal/api/api_test.go
+index f4c13567..4ceef5d0 100644
+--- a/internal/api/api_test.go
++++ b/internal/api/api_test.go
+@@ -105,6 +105,19 @@ func TestGetEntryIDsHandlerRequiresAuthentication(t *testing.T) {
+ 	}
+ }
+ 
++func TestExportStarredHandlerRequiresAuthentication(t *testing.T) {
++	handler := NewHandler(nil, nil)
++
++	r := httptest.NewRequest(http.MethodGet, "/v1/export/starred", nil)
++	w := httptest.NewRecorder()
++
++	handler.ServeHTTP(w, r)
++
++	if got := w.Code; got != http.StatusUnauthorized {
++		t.Fatalf(`Unexpected status code, got %d instead of %d`, got, http.StatusUnauthorized)
++	}
++}
++
+ func TestGetEntryIDsHandlerRejectsInvalidStarredParam(t *testing.T) {
+ 	handler := NewHandler(nil, nil)
+ 
+diff --git a/internal/api/entry_handlers.go b/internal/api/entry_handlers.go
+index 217eeb38..41b79c38 100644
+--- a/internal/api/entry_handlers.go
++++ b/internal/api/entry_handlers.go
+@@ -118,6 +118,27 @@ func (h *handler) getEntriesHandler(w http.ResponseWriter, r *http.Request) {
+ 	h.findEntries(w, r, 0, 0)
+ }
+ 
++// exportStarredEntriesHandler returns every starred entry of the user, without pagination.
++func (h *handler) exportStarredEntriesHandler(w http.ResponseWriter, r *http.Request) {
++	// No WithLimit call: the builder applies no LIMIT, unlike the paginated /v1/entries.
++	entries, err := h.store.NewEntryQueryBuilder(request.UserID(r)).
++		WithStarred(true).
++		WithSorting(model.DefaultSortingOrder, model.DefaultSortingDirection).
++		WithEnclosures().
++		GetEntries()
++	if err != nil {
++		response.JSONServerError(w, r, err)
++		return
++	}
++
++	for i := range entries {
++		entries[i].Content = mediaproxy.RewriteDocumentWithAbsoluteProxyURL(entries[i].Content)
++		entries[i].Enclosures.ProxifyEnclosureURL(config.Opts.MediaProxyMode(), config.Opts.MediaProxyResourceTypes())
++	}
++
++	response.JSON(w, r, &entriesResponse{Total: len(entries), Entries: entries})
++}
++
+ func (h *handler) findEntries(w http.ResponseWriter, r *http.Request, feedID int64, categoryID int64) {
+ 	statuses := request.QueryStringParamList(r, "status")
+ 	for _, status := range statuses {

@@ -1,0 +1,144 @@
+diff --git a/internal/http/request/context.go b/internal/http/request/context.go
+index 69e09150..84497119 100644
+--- a/internal/http/request/context.go
++++ b/internal/http/request/context.go
+@@ -22,6 +22,7 @@ const (
+ 	WebSessionContextKey
+ 	ClientIPContextKey
+ 	GoogleReaderTokenKey
++	RequestIDContextKey
+ )
+ 
+ // WebSession returns the current web session from the request context, if present.
+@@ -95,6 +96,11 @@ func ClientIP(r *http.Request) string {
+ 	return getContextStringValue(r, ClientIPContextKey)
+ }
+ 
++// RequestID returns the request ID stored in the request context.
++func RequestID(r *http.Request) string {
++	return getContextStringValue(r, RequestIDContextKey)
++}
++
+ func getContextStringValue(r *http.Request, key ContextKey) string {
+ 	if v := r.Context().Value(key); v != nil {
+ 		if value, valid := v.(string); valid {
+diff --git a/internal/http/server/middleware.go b/internal/http/server/middleware.go
+index 50c25b16..42c437a9 100644
+--- a/internal/http/server/middleware.go
++++ b/internal/http/server/middleware.go
+@@ -10,9 +10,38 @@ import (
+ 	"time"
+ 
+ 	"miniflux.app/v2/internal/config"
++	"miniflux.app/v2/internal/crypto"
+ 	"miniflux.app/v2/internal/http/request"
+ )
+ 
++// statusRecorder captures the status code and body size written by a handler.
++type statusRecorder struct {
++	http.ResponseWriter
++	status int
++	size   int
++}
++
++func (s *statusRecorder) WriteHeader(status int) {
++	if s.status == 0 {
++		s.status = status
++	}
++	s.ResponseWriter.WriteHeader(status)
++}
++
++func (s *statusRecorder) Write(b []byte) (int, error) {
++	if s.status == 0 {
++		s.status = http.StatusOK
++	}
++	n, err := s.ResponseWriter.Write(b)
++	s.size += n
++	return n, err
++}
++
++// Unwrap lets http.ResponseController reach the underlying writer.
++func (s *statusRecorder) Unwrap() http.ResponseWriter {
++	return s.ResponseWriter
++}
++
+ func middleware(next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		remoteIP := request.FindRemoteIP(r)
+@@ -21,18 +50,27 @@ func middleware(next http.Handler) http.Handler {
+ 		ctx := r.Context()
+ 		ctx = context.WithValue(ctx, request.ClientIPContextKey, clientIP)
+ 
++		requestID := crypto.GenerateRandomStringHex(8)
++		ctx = context.WithValue(ctx, request.RequestIDContextKey, requestID)
++		w.Header().Set("X-Request-Id", requestID)
++		rec := &statusRecorder{ResponseWriter: w}
++		w = rec
++
+ 		if isTrustedProxyClientIP && r.Header.Get("X-Forwarded-Proto") == "https" {
+ 			config.Opts.SetHTTPSValue(true)
+ 		}
+ 
+ 		t1 := time.Now()
+ 		defer func() {
+-			slog.Debug("Incoming request",
++			slog.Info("Incoming request",
++				slog.String("request_id", requestID),
+ 				slog.String("client_ip", clientIP),
+ 				slog.Group("request",
+ 					slog.String("method", r.Method),
+ 					slog.String("uri", r.RequestURI),
+ 					slog.String("protocol", r.Proto),
++					slog.Int("status", rec.status),
++					slog.Int("response_size", rec.size),
+ 					slog.Duration("execution_time", time.Since(t1)),
+ 				),
+ 			)
+diff --git a/internal/http/server/middleware_test.go b/internal/http/server/middleware_test.go
+new file mode 100644
+index 00000000..940ac5e7
+--- /dev/null
++++ b/internal/http/server/middleware_test.go
+@@ -0,0 +1,42 @@
++// SPDX-FileCopyrightText: Copyright The Miniflux Authors. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++package server // import "miniflux.app/v2/internal/http/server"
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"miniflux.app/v2/internal/http/request"
++)
++
++func TestMiddlewareSetsUniqueRequestID(t *testing.T) {
++	var seen string
++	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		seen = request.RequestID(r)
++		w.WriteHeader(http.StatusTeapot)
++	}))
++
++	ids := map[string]bool{}
++	for range 2 {
++		rec := httptest.NewRecorder()
++		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
++
++		header := rec.Header().Get("X-Request-Id")
++		if header == "" {
++			t.Fatal("expected X-Request-Id response header")
++		}
++		if header != seen {
++			t.Errorf("header %q does not match context request ID %q", header, seen)
++		}
++		if rec.Code != http.StatusTeapot {
++			t.Errorf("status = %d, want %d", rec.Code, http.StatusTeapot)
++		}
++		ids[header] = true
++	}
++
++	if len(ids) != 2 {
++		t.Error("expected a different request ID for each request")
++	}
++}

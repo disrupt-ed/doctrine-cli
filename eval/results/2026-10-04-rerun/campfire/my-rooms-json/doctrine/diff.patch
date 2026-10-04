@@ -1,0 +1,51 @@
+diff --git a/app/controllers/rooms_controller.rb b/app/controllers/rooms_controller.rb
+index 1f1d28e..4b28246 100644
+--- a/app/controllers/rooms_controller.rb
++++ b/app/controllers/rooms_controller.rb
+@@ -4,7 +4,10 @@ class RoomsController < ApplicationController
+   before_action :remember_last_room_visited, only: :show
+ 
+   def index
+-    redirect_to room_url(Current.user.rooms.last)
++    respond_to do |format|
++      format.html { redirect_to room_url(Current.user.rooms.last) }
++      format.json { @memberships = Current.user.memberships.with_ordered_room }
++    end
+   end
+ 
+   def show
+diff --git a/app/views/rooms/index.json.jbuilder b/app/views/rooms/index.json.jbuilder
+new file mode 100644
+index 0000000..93022ca
+--- /dev/null
++++ b/app/views/rooms/index.json.jbuilder
+@@ -0,0 +1,4 @@
++json.array! @memberships do |membership|
++  json.(membership.room, :id, :name)
++  json.unread membership.unread?
++end
+diff --git a/test/controllers/rooms_controller_test.rb b/test/controllers/rooms_controller_test.rb
+index 62edf72..673a4b1 100644
+--- a/test/controllers/rooms_controller_test.rb
++++ b/test/controllers/rooms_controller_test.rb
+@@ -10,6 +10,20 @@ class RoomsControllerTest < ActionDispatch::IntegrationTest
+     assert_redirected_to room_url(users(:david).rooms.last)
+   end
+ 
++  test "index as json lists the user's rooms with their unread state" do
++    unread, *read = users(:david).memberships.to_a
++    unread.update!(unread_at: Time.current)
++    read.each(&:read)
++
++    get rooms_url(format: :json)
++    assert_response :success
++
++    rooms = response.parsed_body.index_by { |room| room["id"] }
++    assert_equal users(:david).room_ids.sort, rooms.keys.sort
++    assert rooms[unread.room_id]["unread"]
++    assert read.none? { |membership| rooms[membership.room_id]["unread"] }
++  end
++
+   test "show" do
+     get room_url(users(:david).rooms.last)
+     assert_response :success
