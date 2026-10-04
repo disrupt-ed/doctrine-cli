@@ -1,0 +1,8 @@
+name: engineering/default
+description: KISS, YAGNI, minimal dependencies, late abstraction. Applies to every stack.
+
+# Files in the order they are composed.
+files:
+  - decisions.md
+  - dependencies.md
+  - working-with-the-human.md

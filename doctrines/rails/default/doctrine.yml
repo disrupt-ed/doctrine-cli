@@ -1,0 +1,10 @@
+name: rails/default
+description: Can Rails already do this? before which gem?
+parent: ruby/default
+
+# Files in the order they are composed.
+files:
+  - the-rails-way.md
+  - rails-already-does-this.md
+  - gems.md
+  - data.md

@@ -1,0 +1,8 @@
+name: go/default
+description: Standard library, explicit code, small interfaces.
+parent: engineering/default
+
+# Files in the order they are composed.
+files:
+  - go.md
+  - standard-library.md

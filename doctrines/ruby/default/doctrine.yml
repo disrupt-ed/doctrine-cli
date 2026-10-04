@@ -1,0 +1,7 @@
+name: ruby/default
+description: Ruby idioms and standard library first.
+parent: engineering/default
+
+# Files in the order they are composed.
+files:
+  - ruby.md
