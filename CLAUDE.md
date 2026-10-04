@@ -1,4 +1,4 @@
-# Doctrine CLI
+# Agent Doctrine CLI
 
 Open-source Go CLI. It detects a repository's stack, composes the Doctrine and generates agent configuration (Claude Code first).
 
