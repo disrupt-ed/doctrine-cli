@@ -1,0 +1,102 @@
+name: Release
+
+# Push a tag like v0.1.0 to build binaries, publish a GitHub release and
+# update the Homebrew formula.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./... && go test ./...
+
+      - name: Build
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64 windows/amd64; do
+            os="${target%/*}"; arch="${target#*/}"
+            name="doctrine_${version}_${os}_${arch}"
+            bin="doctrine"; [ "$os" = windows ] && bin="doctrine.exe"
+            mkdir "build-$name"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=$version" -o "build-$name/$bin" ./cmd/doctrine
+            cp README.md LICENSE "build-$name/" 2>/dev/null || cp README.md "build-$name/"
+            if [ "$os" = windows ]; then
+              (cd "build-$name" && zip -q "../dist/$name.zip" *)
+            else
+              tar -czf "dist/$name.tar.gz" -C "build-$name" .
+            fi
+          done
+          (cd dist && sha256sum * > checksums.txt)
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+
+      - name: Update Homebrew formula
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP: ${{ vars.HOMEBREW_TAP || format('{0}/homebrew-tap', github.repository_owner) }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          sum() { grep " doctrine_${version}_$1.tar.gz\$" dist/checksums.txt | cut -d' ' -f1; }
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP}.git" tap
+          mkdir -p tap/Formula
+          cat > tap/Formula/doctrine.rb <<RUBY
+          class Doctrine < Formula
+            desc "Teach your coding agent how you build software"
+            homepage "https://doctrine.codedynamic.com"
+            version "${version}"
+
+            on_macos do
+              on_arm do
+                url "${url}/doctrine_${version}_darwin_arm64.tar.gz"
+                sha256 "$(sum darwin_arm64)"
+              end
+              on_intel do
+                url "${url}/doctrine_${version}_darwin_amd64.tar.gz"
+                sha256 "$(sum darwin_amd64)"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "${url}/doctrine_${version}_linux_arm64.tar.gz"
+                sha256 "$(sum linux_arm64)"
+              end
+              on_intel do
+                url "${url}/doctrine_${version}_linux_amd64.tar.gz"
+                sha256 "$(sum linux_amd64)"
+              end
+            end
+
+            def install
+              bin.install "doctrine"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/doctrine version")
+            end
+          end
+          RUBY
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/doctrine.rb
+          git commit -m "doctrine ${version}"
+          git push
