@@ -1,0 +1,12 @@
+{
+  "name": "rack-attack",
+  "version": "6.7.0",
+  "downloads": 123456789,
+  "licenses": ["MIT"],
+  "homepage_uri": "https://github.com/rack/rack-attack",
+  "source_code_uri": "https://github.com/rack/rack-attack/tree/v6.7.0",
+  "dependencies": {
+    "development": [{"name": "rake", "requirements": ">= 0"}],
+    "runtime": [{"name": "rack", "requirements": "< 4, >= 1.0"}]
+  }
+}

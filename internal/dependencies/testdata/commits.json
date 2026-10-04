@@ -1,0 +1,6 @@
+[
+  {"sha":"a","author":{"login":"alice"},"commit":{"author":{"email":"alice@example.com"}}},
+  {"sha":"b","author":{"login":"alice"},"commit":{"author":{"email":"alice@example.com"}}},
+  {"sha":"c","author":{"login":"bob"},"commit":{"author":{"email":"bob@example.com"}}},
+  {"sha":"d","author":null,"commit":{"author":{"email":"carol@example.com"}}}
+]

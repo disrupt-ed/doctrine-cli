@@ -1,0 +1,2 @@
+# Generated files and golden tests expect LF line endings on every OS.
+* text=auto eol=lf

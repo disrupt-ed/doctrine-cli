@@ -1,0 +1,5 @@
+[
+  {"ghsa_id":"GHSA-1","severity":"high","withdrawn_at":null},
+  {"ghsa_id":"GHSA-2","severity":"critical","withdrawn_at":"2024-01-01T00:00:00Z"},
+  {"ghsa_id":"GHSA-3","severity":"medium","withdrawn_at":null}
+]

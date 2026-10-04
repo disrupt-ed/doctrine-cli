@@ -1,0 +1,12 @@
+module github.com/Example/mux
+
+go 1.20
+
+require github.com/one/direct v1.0.0
+
+require (
+	// a comment
+	github.com/two/direct v1.0.0
+	github.com/three/direct v1.0.0
+	github.com/four/indirect v1.0.0 // indirect
+)
